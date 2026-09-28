@@ -1,5 +1,10 @@
 // Apple //e Sound Generator for Tang Nano 20K
 // Decodes $C030 speaker toggle and drives onboard MAX98357A I2S Class-D amplifier
+//
+// audio_sample updates once per I2S frame, at exactly 46875 Hz: 27 MHz is
+// 576 clocks per frame (27e6 / 46875 = 576) and a frame is 64 BCLKs, so the
+// BCLK period is 9 clocks.  top.v resamples that to the 48 kHz HDMI rate, so
+// the two rates are not independent -- changing one means changing the other.
 
 module sound_generator (
     input  wire        clk,        // 27.0 MHz
@@ -43,6 +48,12 @@ module sound_generator (
 
     // BCLK generation: 27 MHz / 9 = 3.0 MHz
     // 64 BCLKs per sample frame -> 3.0 MHz / 64 = 46.875 kHz sample rate
+    //
+    // 27 MHz / 46.875 kHz is exactly 576 clocks per frame = 9 clocks per BCLK
+    // period, and 9 is odd, so bclk_div free-runs 0..8 and toggles BCLK at
+    // both 4 and 8: 4 clocks high, 5 low.  I2S tolerates the asymmetry, and
+    // only the period matters.  A single toggle compare would give an even
+    // period and land on 42187.5 Hz instead, which is what this used to do.
     reg [3:0] bclk_div = 4'd0;
     reg [5:0] bit_cnt  = 6'd0; // 0..63
     reg [31:0] shift_reg = 32'd0;
@@ -64,10 +75,17 @@ module sound_generator (
             shift_reg     <= 32'd0;
             tone_phase    <= 32'd0;
         end else begin
-            // BCLK clock division
-            if (bclk_div == 4'd4) begin
-                bclk_div <= 4'd0;
+            // BCLK clock division: the counter runs 0..8 and toggles BCLK at
+            // both 4 and 8 (see bclk_div above), giving a 9-clock period.
+            // The shift below is gated on the *old* i2s_bclk being 1, which
+            // is true only on the 4->8 transition, i.e. the falling edge, so
+            // data still changes on the falling edge as I2S requires.
+            if (bclk_div == 4'd4 || bclk_div == 4'd8) begin
                 i2s_bclk <= ~i2s_bclk;
+                if (bclk_div == 4'd8)
+                    bclk_div <= 4'd0;
+                else
+                    bclk_div <= 4'd5;
 
                 // Shift data out on falling edge of BCLK
                 if (i2s_bclk) begin

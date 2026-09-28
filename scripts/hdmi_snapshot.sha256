@@ -1,0 +1,27 @@
+# ============================================================================
+#  scripts/hdmi_snapshot.sha256 -- what src/hdmi/ is, precisely.
+#
+#  src/hdmi/ is a local copy of the HDMI transmitter from the TN20K-HDMI
+#  project, taken at commit 388b39e.  It is a copy on purpose: this project
+#  must build without a checkout of the other repo next to it, and the copy
+#  carries one deliberate local change (see below).  This file records what
+#  that copy is, so a local edit to src/hdmi/ cannot happen silently.
+#
+#  Deliberate local change, relative to TN20K-HDMI at 388b39e:
+#    src/hdmi/hdmi_tx.v  -- the RGB_QUANT parameter, which TN20K-HDMI does not
+#      have.  This design's palette is 0..255, so top.v passes 2'b10 and the
+#      AVI InfoFrame says full range; a CE-mode sink would otherwise assume
+#      limited range and crush blacks.  Nothing else differs.
+#
+#  Re-baseline after an intentional change:
+#    (cd src/hdmi && sha256sum *.v *.vh | sed 's|  |  src/hdmi/|') \
+#        > scripts/hdmi_snapshot.sha256
+#  and bump UPSTREAM_COMMIT in scripts/hdmi_diff.sh to match.
+# ============================================================================
+2b9331541cf3298e82b12a032febc064533f74802d6abc865fd447d16904867e  src/hdmi/hdmi_data_island.v
+36863d73fdc34e6ea907ab88fd675e972d210822e609c248f75ca047e095a59f  src/hdmi/hdmi_island_scheduler.v
+732f5a1169be142455e30640fa32795d34134a2872beb07ca187589ccc12ad8c  src/hdmi/hdmi_packet_ecc.v
+16fac9d49ca8285f455deb0153d76db9ec4bfeefbd8841fad79db476f288c7e0  src/hdmi/hdmi_packets.v
+80eaaa422954174475b33c035e8572222944cf37bbb5d6c35b12e66cdb4f00d7  src/hdmi/hdmi_tmds_encoder.v
+7190fb86ae63e15b3ea162f10cc6bbf5d282158d312b122fc41b694eff7e43c3  src/hdmi/hdmi_tx.v
+c292b842cb96606bcf0f929c93fee77074c32e5f06013dd58c6aa49ce7707d7e  src/hdmi/hdmi_defs.vh

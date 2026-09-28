@@ -7,9 +7,6 @@ root=$(cd "$(dirname "$0")/.." && pwd)
 cd "$root"
 . scripts/toolchain.sh
 fs="build/bitstream/$(sed -n 's/^name: *//p' fpga.yaml).fs"
-if [ ! -f "$fs" ] && [ -f "build/apple2_tn20k.fs" ]; then
-    fs="build/apple2_tn20k.fs"
-fi
 if [ "$1" = "--flash" ]; then
     openFPGALoader -b tangnano20k -f "$fs"
 else

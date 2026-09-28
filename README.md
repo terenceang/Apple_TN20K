@@ -6,14 +6,14 @@ An Apple //e implemented in Verilog for the [Sipeed Tang Nano 20K](https://wiki.
 
 - **65C02 CPU** at 1.023 MHz (Arlet Ottens' core with 65C02 extensions)
 - **64 KB RAM** in block RAM, with a **language card** for $D000–$FFFF bank switching
-- **HDMI video** at 720×480p60 (CEA-861 VIC 2), with the 560×384 Apple display centered; text, lo-res and hi-res modes, including mixed mode and page 2
+- **HDMI video** at 720×480p60 (CEA-861 VIC 2), with the 560×384 Apple display centered; text and lo-res modes, including mixed mode and page 2
 - **Audio** from the $C030 speaker toggle, sent both over HDMI (48 kHz L-PCM in data islands) and through the onboard MAX98357A I2S amplifier
 - **UART keyboard** at 115200 baud over the USB-C serial bridge (or a Bluetooth-to-UART module); ANSI arrow keys are mapped to Apple control codes
 - **Gamepad over UART**: pushbuttons $C061–$C063 and paddles 0/1
 - **Built-in hardware debugger**: press Ctrl+B to freeze the CPU and inspect registers, single-step, or dump memory
 - **Diagnostic LEDs**: heartbeat, PLL lock, reset, CPU write, text mode, key strobe
 
-Not yet implemented: auxiliary memory / 80-column display, peripheral slots, disk drives, and interrupts.
+Not yet implemented: **hi-res** (the `HIRES` softswitch latches and reads back correctly at `$C01D`, but `video_generator` ignores it and always renders lo-res), auxiliary memory / 80-column display, peripheral slots, disk drives, and interrupts.
 
 ## Requirements
 
@@ -25,10 +25,20 @@ Not yet implemented: auxiliary memory / 80-column display, peripheral slots, dis
 ## Building
 
 ```sh
-make            # synthesize, place & route, pack => build/apple2_tn20k.fs
+make            # synthesize, place & route, pack => build/bitstream/Apple_TN20K.fs
+make synth      # yosys only (build/yosys/top.json)
+make pnr        # place & route only (build/pnr/top.pnr.json)
 make flash-sram # load into SRAM (lost on power cycle)
 make flash      # write to onboard flash (persistent)
 make clean
+```
+
+`make` is a thin wrapper around `scripts/build.sh`, which is the single build implementation, so the Makefile and the **OpenFPGA Deck** extension produce the same netlist at the same paths. The RTL file list lives in `fpga.yaml`; add new source files there. `scripts/build.sh` fails the build if the achieved Fmax falls below the 27 MHz target, and `constraints/top.sdc` is available for a stricter two-domain timing analysis.
+
+To keep the HDMI core honest, `scripts/hdmi_diff.sh --check` verifies `src/hdmi/` still matches its recorded snapshot, and `--upstream` reports what has changed in the TN20K-HDMI project since.
+
+```sh
+sim/run.sh      # run all testbenches with iverilog (~80 s; tb_top needs the ROMs)
 ```
 
 If building with the **OpenFPGA Deck** extension in VS Code or `scripts/build.sh` (which writes to `build/bitstream/Apple_TN20K.fs`), use the programming script:
@@ -82,7 +92,7 @@ The gamepad sends a 5-byte packet on the same UART: `FF 01 <buttons> <x> <y>`. B
 
 ## Video Programming to HDMI AV
 
-The Apple //e display pipeline is interfaced to the HDMI transmitter (`hdmi_tx`) from the TN20K-HDMI reference design, outputting standard CEA-861 720×480p @ 59.94 Hz (VIC 2) with embedded 48 kHz stereo audio.
+The Apple //e display pipeline is interfaced to the HDMI transmitter (`hdmi_tx`) in `src/hdmi/`, outputting standard CEA-861 720×480p @ 59.94 Hz (VIC 2) with embedded 48 kHz stereo audio.
 
 ### Video Architecture & Centering
 
@@ -179,4 +189,4 @@ scripts/                Deck-compatible build and programming scripts
 
 [MIT](LICENSE) © 2026 Terence Ang.
 
-The HDMI transmitter in `src/hdmi/` is from the TN20K-HDMI project (MIT). The 65C02 core in `src/cpu/` is by Arlet Ottens, David Banks and Ed Spittles, and stays under its original permissive terms (see the file headers). Apple //e ROMs are copyright Apple and are not part of this project.
+The HDMI transmitter in `src/hdmi/` is a local copy of the one from the TN20K-HDMI project, taken at commit `388b39e` and differing only in `hdmi_tx`'s `RGB_QUANT` parameter. `scripts/hdmi_snapshot.sha256` records the snapshot and `scripts/hdmi_diff.sh --check` fails if it is edited locally without being re-baselined; `--upstream` reports what has changed in the other project since. The 65C02 core in `src/cpu/` is by Arlet Ottens, David Banks and Ed Spittles, and stays under its original permissive terms (see the file headers). Apple //e ROMs are copyright Apple and are not part of this project.

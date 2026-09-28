@@ -1,5 +1,11 @@
 // Apple //e Memory Subsystem (RAM and ROMs) for Tang Nano 20K
-// 64KB RAM (32 SP blocks), 16KB System ROM (8 SP blocks), 8KB Character ROM (4 SP blocks)
+// 64KB RAM (32 SP blocks), 16KB System ROM (8 SP blocks), 4KB Character ROM (2 SP blocks)
+//
+// The character ROM is declared 4KB, not 8KB, because video_generator's
+// char_rom_addr is 12 bits (src/video_generator.v).  Declaring 8KB only put
+// two dead SP blocks on a device that is otherwise at 95% BSRAM use.  The
+// dump must match: roms/apple2e_char.hex is 4096 lines, the Apple //e
+// Enhanced 342-0265-A 2732.  See roms/README.md.
 
 module apple2_system_rom (
     input  wire        clk,
@@ -20,10 +26,10 @@ endmodule
 
 module apple2_char_rom (
     input  wire        clk,
-    input  wire [11:0] addr, // 4KB primary bank
+    input  wire [11:0] addr, // 4KB, covers the whole 2732
     output reg  [7:0]  dout
 );
-    reg [7:0] mem [0:8191];
+    reg [7:0] mem [0:4095];
 
     initial begin
         $readmemh("roms/apple2e_char.hex", mem);

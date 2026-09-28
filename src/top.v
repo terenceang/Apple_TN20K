@@ -247,6 +247,10 @@ module top (
     // (sound_generator.audio_sample, updated at 46.875 kHz), sampled at
     // VM_AUDIO_HZ = 48 kHz. 27 MHz / 48 kHz = 562.5 clocks, so a fractional
     // accumulator alternates 562 and 563.
+    //
+    // The two rates are coupled: sound_generator holds audio_sample for one
+    // I2S frame of exactly 576 clocks, so it must stay at 46.875 kHz or this
+    // resampler plays it at the wrong speed. sim/tb_sound.v checks that.
     wire signed [15:0] spkr_sample;
     reg  [24:0]        hdmi_audio_acc   = 25'd0;
     reg                hdmi_audio_valid = 1'b0;
