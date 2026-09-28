@@ -1,0 +1,21 @@
+# Build outputs (bitstreams, netlists, logs)
+/build/
+
+# Apple //e ROM images are Apple copyright and must not be committed.
+# See roms/README.md for how to supply them.
+/roms/*.hex
+/roms/*.bin
+/roms/*.rom
+
+# Simulation / lint artifacts
+*.vcd
+*.fst
+*.vvp
+obj_dir/
+
+# Editors / OS
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store

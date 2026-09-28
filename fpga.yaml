@@ -1,0 +1,10 @@
+# fpga.yaml — OpenFPGA Deck project
+name: Apple_TN20K
+board: tang-nano-20k
+top: top
+
+sources:
+  - src/top.v
+
+constraints:
+  - constraints/top.cst
