@@ -54,9 +54,28 @@ module apple2_core (
     wire        cpu_we;
     wire        cpu_sync;
 
+    // Video-CPU memory conflict prevention:
+    // If a 1 MHz CPU cycle enable (ce_1m) coincides with a video prefetch
+    // access (vram_req or its read latch cycle vram_req_d), hold the cycle
+    // enable until video RAM read has finished. This completely eliminates
+    // contention/corruption between video prefetch and CPU RAM reads/writes,
+    // avoiding display flickering/scrolling artifacts.
+    reg ce_1m_pending;
+    wire video_busy = vram_req || vram_req_d;
+    wire cpu_ce = (ce_1m || ce_1m_pending) && !video_busy;
+
+    always @(posedge clk or posedge reset) begin
+        if (reset)
+            ce_1m_pending <= 1'b0;
+        else if ((ce_1m || ce_1m_pending) && video_busy)
+            ce_1m_pending <= 1'b1;
+        else
+            ce_1m_pending <= 1'b0;
+    end
+
     assign io_addr  = cpu_addr[7:0];
-    assign io_read  = ce_1m && !cpu_we && (cpu_addr[15:8] == 8'hC0);
-    assign io_write = ce_1m &&  cpu_we && (cpu_addr[15:8] == 8'hC0);
+    assign io_read  = cpu_ce && !cpu_we && (cpu_addr[15:8] == 8'hC0);
+    assign io_write = cpu_ce &&  cpu_we && (cpu_addr[15:8] == 8'hC0);
 
     assign debug_cpu_addr = cpu_addr;
     assign debug_cpu_dout = cpu_dout;
@@ -73,7 +92,7 @@ module apple2_core (
         .WE(cpu_we),
         .IRQ(1'b0),
         .NMI(1'b0),
-        .RDY(ce_1m & cpu_rdy),
+        .RDY(cpu_ce & cpu_rdy),
         .SYNC(cpu_sync),
         .debug_a(debug_cpu_a),
         .debug_x(debug_cpu_x),
@@ -110,7 +129,7 @@ module apple2_core (
             store80      <= 1'b0;
             intcxrom     <= 1'b1; // Default: Internal CX ROM active
             spkr_pulse   <= 1'b0;
-        end else if (ce_1m) begin
+        end else if (cpu_ce) begin
             spkr_pulse <= 1'b0;
 
             if (cpu_addr[15:8] == 8'hC0) begin
@@ -177,7 +196,7 @@ module apple2_core (
     // RAM Write Enable:
     // Writes go to RAM if in $0000-$BFFF, or if in $D000-$FFFF with lc_write_ram enabled
     wire ram_we_cpu = cpu_we && (is_ram_base || (is_lc_area && lc_write_ram));
-    wire ram_we     = (ce_1m && cpu_rdy) ? ram_we_cpu : 1'b0;
+    wire ram_we     = (cpu_ce && cpu_rdy) ? ram_we_cpu : 1'b0;
 
     // Dual-latch RAM arbitration between CPU and Video Generator
     reg vram_req_d;
@@ -188,8 +207,10 @@ module apple2_core (
             vram_req_d <= vram_req;
     end
 
-    wire ram_addr_is_video = vram_req && !ram_we;
-    wire [15:0] ram_addr   = ram_addr_is_video ? vram_addr : effective_cpu_addr;
+    wire is_lc_bank2_d = lc_bank2 && (effective_cpu_addr >= 16'hD000 && effective_cpu_addr < 16'hE000);
+    wire [15:0] cpu_ram_addr = is_lc_bank2_d ? {4'hC, effective_cpu_addr[11:0]} : effective_cpu_addr;
+    wire ram_addr_is_video = vram_req;
+    wire [15:0] ram_addr   = ram_addr_is_video ? vram_addr : cpu_ram_addr;
     wire [7:0]  ram_din    = cpu_dout;
     wire [7:0]  ram_dout;
 
@@ -258,29 +279,39 @@ module apple2_core (
     wire [7:0] softswitch_read_data = {sw_bit, 7'h00};
 
     // CPU Data In (Read Bus) Multiplexer:
+    reg [7:0] cpu_din_comb;
     always @(*) begin
         if (is_ram_base) begin
-            cpu_din = cpu_ram_dout;
+            cpu_din_comb = cpu_ram_dout;
         end else if (is_io) begin
             if (input_hit) begin
-                cpu_din = input_dout;
+                cpu_din_comb = input_dout;
             end else if (effective_cpu_addr[7:4] == 4'h1 && effective_cpu_addr[3:0] != 4'h0) begin
-                cpu_din = softswitch_read_data;
+                cpu_din_comb = softswitch_read_data;
             end else begin
-                cpu_din = 8'h00;
+                cpu_din_comb = 8'h00;
             end
         end else if (is_slot_rom) begin
-            cpu_din = rom_dout; // System ROM provides internal firmware for $C100-$CFFF
+            cpu_din_comb = rom_dout; // System ROM provides internal firmware for $C100-$CFFF
         end else if (is_lc_area) begin
             if (lc_read_ram)
-                cpu_din = cpu_ram_dout; // Read from Language Card RAM
+                cpu_din_comb = cpu_ram_dout; // Read from Language Card RAM
             else
-                cpu_din = rom_dout; // Read from System ROM (Applesoft BASIC + Monitor)
+                cpu_din_comb = rom_dout; // Read from System ROM (Applesoft BASIC + Monitor)
         end else begin
-            cpu_din = 8'hFF;
+            cpu_din_comb = 8'hFF;
         end
     end
 
-    assign dbg_mem_din = cpu_din;
+    // Latch data in to CPU on 1 MHz clock enable to prevent combinational loops
+    // with CPU's internal address generator (which derives AB from DI in ABS/JMP/ZP states).
+    always @(posedge clk or posedge reset) begin
+        if (reset)
+            cpu_din <= 8'h00;
+        else if (cpu_ce && cpu_rdy)
+            cpu_din <= cpu_din_comb;
+    end
+
+    assign dbg_mem_din = (!cpu_rdy) ? cpu_din_comb : cpu_din;
 
 endmodule

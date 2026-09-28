@@ -43,6 +43,13 @@ module apple2_ram_64k (
     output reg  [7:0]  dout
 );
     reg [7:0] mem [0:65535];
+`ifndef SYNTHESIS
+    integer i;
+    initial begin
+        for (i = 0; i < 65536; i = i + 1)
+            mem[i] = 8'h00;
+    end
+`endif
 
     always @(posedge clk) begin
         if (we)

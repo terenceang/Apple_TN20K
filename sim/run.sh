@@ -54,6 +54,9 @@ run_tb tb_data_island  $island
 # shellcheck disable=SC2086
 run_tb tb_video_hdmi src/video_generator.v src/colorbar_gen.v $hdmi
 
+# CPU boot and trace from Apple //e System ROM
+run_tb tb_cpu_trace src/apple2_core.v src/apple2_mem.v src/cpu/cpu_65c02.v src/cpu/ALU.v
+
 # Board level: top.v on behavioural Gowin primitives, pins deserialised.
 # shellcheck disable=SC2086
 run_tb tb_top sim/models/gowin_prims.v $srcs
