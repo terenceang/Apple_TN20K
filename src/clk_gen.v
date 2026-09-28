@@ -8,13 +8,10 @@ module clk_gen (
     output wire clk_pixel,    // 27.0 MHz pixel clock
     output wire pll_locked,   // PLL locked indicator
     output reg  ce_1m,        // 1.023 MHz clock enable for 6502 CPU
-    output reg  ce_14m,       // 14.318 MHz clock enable
     output reg  flash_clk     // ~2 Hz flashing text clock
 );
 
-    assign clk_pixel = clk_in; // 27 MHz pixel clock
-
-    // Gowin rPLL instance: 27 MHz in -> 135 MHz out
+    // Gowin rPLL instance: 27 MHz in -> 135 MHz out (5x TMDS serial clock)
     rPLL #(
         .FCLKIN("27.0"),
         .IDIV_SEL(0),   // PFD = 27.0 MHz
@@ -38,20 +35,27 @@ module clk_gen (
         .FDLY(4'b0)
     );
 
-    // 14.31818 MHz clock enable accumulator:
-    // step = round(14318182 * 2^32 / 27000000) = 2277916301
-    localparam [31:0] STEP_14M = 32'd2277916301;
-    reg [32:0] acc_14m = 33'd0;
+    // clk_pixel MUST be derived from clk_tmds via CLKDIV (divide-by-5), not
+    // tapped directly off the crystal: OSER10 requires a fixed, drift-free
+    // phase relationship between PCLK (clk_pixel) and FCLK (clk_tmds), which
+    // only a shared hardware divider off the same PLL output guarantees.
+    // Feeding it the raw crystal instead (two independently-routed clock
+    // nets, frequency-locked but not phase-locked through one divider)
+    // causes the HDMI serializers to intermittently lose PCLK/FCLK
+    // alignment -- observed on hardware as the display dropping in and out
+    // of sync. This is the same rPLL+CLKDIV pattern Gowin's own DVI TX
+    // reference design and other open-toolchain Tang Nano 20K HDMI
+    // projects (e.g. nestang) use.
+    CLKDIV #(
+        .DIV_MODE("5"),
+        .GSREN("false")
+    ) clkdiv_pixel (
+        .CLKOUT(clk_pixel),
+        .HCLKIN(clk_tmds),
+        .RESETN(~rst_in & pll_locked),
+        .CALIB(1'b0)
+    );
 
-    always @(posedge clk_pixel or posedge rst_in) begin
-        if (rst_in) begin
-            acc_14m <= 33'd0;
-            ce_14m  <= 1'b0;
-        end else begin
-            acc_14m <= {1'b0, acc_14m[31:0]} + {1'b0, STEP_14M};
-            ce_14m  <= acc_14m[32];
-        end
-    end
 
     // 1.022727 MHz CPU clock enable accumulator:
     // step = round(1022727.27 * 2^32 / 27000000) = 162708307

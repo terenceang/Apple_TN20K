@@ -120,8 +120,8 @@ module input_controller (
             pdl0_cnt <= 12'd0;
             pdl1_cnt <= 12'd0;
         end else begin
-            // Trigger countdown on $C070 read
-            if (io_read && (io_addr == 8'h70)) begin
+            // Trigger countdown on $C070-$C07F read
+            if (io_read && (io_addr[7:4] == 4'h7)) begin
                 pdl0_cnt <= {joy_pdl0, 4'b0000};
                 pdl1_cnt <= {joy_pdl1, 4'b0000};
             end else if (ce_1m) begin
@@ -157,7 +157,7 @@ module input_controller (
             joy_pdl1  <= 8'd128;
         end else begin
             // Clear keyboard strobe on $C010 access
-            if ((io_read || io_write) && (io_addr[7:4] == 4'h1)) begin
+            if ((io_read || io_write) && (io_addr == 8'h10)) begin
                 kbd_data[7] <= 1'b0;
             end
 
@@ -243,25 +243,26 @@ module input_controller (
     // $C063: PB2 (Game Pushbutton 2), bit 7
     // $C064: PDL0 analog countdown, bit 7
     // $C065: PDL1 analog countdown, bit 7
-    assign io_hit = (io_addr[7:4] == 4'h0) || (io_addr[7:4] == 4'h1) ||
+    assign io_hit = (io_addr[7:4] == 4'h0) || (io_addr == 8'h10) ||
                     (io_addr[7:4] == 4'h6) || (io_addr[7:4] == 4'h7);
+
+    reg in_bit;
+    always @(*) begin
+        case (io_addr[3:0])
+            4'h1:    in_bit = pb0;                         // $C061 PB0
+            4'h2:    in_bit = pb1;                         // $C062 PB1
+            4'h3:    in_bit = pb2;                         // $C063 PB2
+            4'h4:    in_bit = (pdl0_cnt != 12'd0);          // $C064 PDL0
+            4'h5:    in_bit = (pdl1_cnt != 12'd0);          // $C065 PDL1
+            default: in_bit = 1'b0;
+        endcase
+    end
 
     always @(*) begin
         case (io_addr[7:4])
-            4'h0: io_dout = kbd_data;                               // $C000-$C00F
-            4'h1: io_dout = {kbd_data[7], kbd_data[6:0]};           // $C010-$C01F
-            4'h6: begin
-                case (io_addr[3:0])
-                    4'h1: io_dout = {pb0, 7'h00};                   // $C061 PB0
-                    4'h2: io_dout = {pb1, 7'h00};                   // $C062 PB1
-                    4'h3: io_dout = {pb2, 7'h00};                   // $C063 PB2
-                    4'h4: io_dout = {pdl0_cnt > 12'd0, 7'h00};       // $C064 PDL0
-                    4'h5: io_dout = {pdl1_cnt > 12'd0, 7'h00};       // $C065 PDL1
-                    default: io_dout = 8'h00;
-                endcase
-            end
-            4'h7: io_dout = 8'h00;                                  // $C070 PDL_STROBE
-            default: io_dout = 8'h00;
+            4'h0, 4'h1: io_dout = kbd_data;                 // $C000-$C01F
+            4'h6:       io_dout = {in_bit, 7'h00};          // $C060-$C06F
+            default:    io_dout = 8'h00;                    // $C070-$C07F & others
         endcase
     end
 

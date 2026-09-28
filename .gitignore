@@ -19,3 +19,4 @@ obj_dir/
 *.swp
 *~
 .DS_Store
+*:Zone.Identifier

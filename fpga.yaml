@@ -4,6 +4,22 @@ board: tang-nano-20k
 top: top
 
 sources:
+  - src/cpu/ALU.v
+  - src/cpu/cpu_65c02.v
+  - src/clk_gen.v
+  - src/apple2_mem.v
+  - src/apple2_core.v
+  - src/video_generator.v
+  - src/colorbar_gen.v
+  - src/input_controller.v
+  - src/sound_generator.v
+  - src/serial_debugger.v
+  - src/hdmi/hdmi_tmds_encoder.v
+  - src/hdmi/hdmi_packet_ecc.v
+  - src/hdmi/hdmi_packets.v
+  - src/hdmi/hdmi_data_island.v
+  - src/hdmi/hdmi_island_scheduler.v
+  - src/hdmi/hdmi_tx.v
   - src/top.v
 
 constraints:

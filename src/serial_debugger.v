@@ -33,6 +33,7 @@ module serial_debugger (
 
     // CPU Ready / Pause Control
     output reg         cpu_rdy,
+    output reg         cpu_reset_req,
 
     // Memory Inspection Bus
     output reg  [15:0] dbg_mem_addr,
@@ -53,10 +54,6 @@ module serial_debugger (
 
     // Hardware Status Inputs
     input  wire        text_mode,
-    input  wire        mixed_mode,
-    input  wire        page2,
-    input  wire        hires_mode,
-    input  wire        spkr_pulse,
     input  wire        pll_locked
 );
 
@@ -265,7 +262,8 @@ module serial_debugger (
     reg [15:0] dump_addr = 16'hFA60;
     reg [7:0]  mem_row [0:15];
     reg [3:0]  mem_col = 4'd0;
-    reg [1:0]  mem_wait = 2'd0;
+    reg [2:0]  mem_wait = 3'd0;
+    reg [7:0]  reset_timer = 8'd0;
 
     // Single Step State Machine
     localparam S_IDLE  = 2'd0;
@@ -279,6 +277,8 @@ module serial_debugger (
         if (reset) begin
             step_fsm       <= S_IDLE;
             cpu_rdy        <= 1'b1;
+            cpu_reset_req  <= 1'b0;
+            reset_timer    <= 8'd0;
             dbg_mode       <= 1'b0;
             latched_pc     <= 16'hFA62;
             latched_a      <= 8'h00;
@@ -300,9 +300,25 @@ module serial_debugger (
             slot_tx_buf    <= 8'd0;
             slot_tx_pend   <= 1'b0;
             mem_col        <= 4'd0;
-            mem_wait       <= 2'd0;
+            mem_wait       <= 3'd0;
         end else begin
             fifo_push_en <= 1'b0;
+
+            // Debugger CPU Reset Sequencer
+            if (reset_timer != 8'd0) begin
+                reset_timer   <= reset_timer - 1'b1;
+                cpu_reset_req <= 1'b1;
+                cpu_rdy       <= 1'b0;
+                step_fsm      <= S_IDLE;
+                if (reset_timer == 8'd1) begin
+                    latched_pc <= 16'hFA62;
+                    dump_addr  <= 16'hFA60;
+                    main_state <= M_REGS;
+                    seq_step   <= 5'd0;
+                end
+            end else begin
+                cpu_reset_req <= 1'b0;
+            end
 
             // Latch Apple II COUT and Slot TX events
             if (cout_hit && !dbg_mode) begin
@@ -415,8 +431,21 @@ module serial_debugger (
                         main_state <= M_MEM;
                         seq_step   <= 5'd0;
                         mem_col    <= 4'd0;
-                        mem_wait   <= 2'd0;
+                        mem_wait   <= 3'd0;
                     end
+
+                    "x", "X": begin
+                        reset_timer <= 8'd255;
+                        dbg_mode    <= 1'b1;
+                        cpu_rdy     <= 1'b0;
+                    end
+
+                    "0": begin dump_addr <= 16'h0000; main_state <= M_MEM; seq_step <= 5'd0; mem_col <= 4'd0; mem_wait <= 3'd0; end
+                    "1": begin dump_addr <= 16'h0100; main_state <= M_MEM; seq_step <= 5'd0; mem_col <= 4'd0; mem_wait <= 3'd0; end
+                    "4": begin dump_addr <= 16'h0400; main_state <= M_MEM; seq_step <= 5'd0; mem_col <= 4'd0; mem_wait <= 3'd0; end
+                    "8": begin dump_addr <= 16'h0800; main_state <= M_MEM; seq_step <= 5'd0; mem_col <= 4'd0; mem_wait <= 3'd0; end
+                    "f", "F": begin dump_addr <= 16'hFA60; main_state <= M_MEM; seq_step <= 5'd0; mem_col <= 4'd0; mem_wait <= 3'd0; end
+                    "v", "V": begin dump_addr <= 16'hFFF0; main_state <= M_MEM; seq_step <= 5'd0; mem_col <= 4'd0; mem_wait <= 3'd0; end
 
                     "t", "T": begin
                         main_state <= M_STATUS;
@@ -622,16 +651,16 @@ module serial_debugger (
                         5'd4: if (!tx_fifo_full) begin
                             fifo_push(" ");
                             mem_col  <= 4'd0;
-                            mem_wait <= 2'd0;
+                            mem_wait <= 3'd0;
                             seq_step <= 5'd5;
                         end
                         5'd5: begin // Read 16 bytes into mem_row
                             dbg_mem_addr <= dump_addr + {12'd0, mem_col};
-                            if (mem_wait == 2'd0) begin
-                                mem_wait <= 2'd1;
+                            if (mem_wait < 3'd4) begin
+                                mem_wait <= mem_wait + 1'b1;
                             end else begin
                                 mem_row[mem_col] <= dbg_mem_din;
-                                mem_wait <= 2'd0;
+                                mem_wait <= 3'd0;
                                 if (mem_col == 4'd15) begin
                                     mem_col  <= 4'd0;
                                     seq_step <= 5'd6;

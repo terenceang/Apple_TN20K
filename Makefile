@@ -8,14 +8,20 @@ SRCS = src/cpu/ALU.v \
        src/apple2_mem.v \
        src/apple2_core.v \
        src/video_generator.v \
+       src/colorbar_gen.v \
        src/input_controller.v \
        src/sound_generator.v \
        src/serial_debugger.v \
-       src/hdmi/tmds_encoder.v \
+       src/hdmi/hdmi_tmds_encoder.v \
+       src/hdmi/hdmi_packet_ecc.v \
+       src/hdmi/hdmi_packets.v \
+       src/hdmi/hdmi_data_island.v \
+       src/hdmi/hdmi_island_scheduler.v \
        src/hdmi/hdmi_tx.v \
        src/top.v
 
 CST = constraints/top.cst
+SDC = constraints/top.sdc
 
 all: pack
 
@@ -29,8 +35,8 @@ build/apple2_tn20k.json: $(SRCS) roms/apple2e_rom.hex roms/apple2e_char.hex | bu
 
 pnr: build/apple2_tn20k_pnr.json
 
-build/apple2_tn20k_pnr.json: build/apple2_tn20k.json $(CST)
-	nextpnr-gowin --device $(DEVICE) --vopt family=$(FAMILY) --vopt cst=$(CST) --ignore-loops --timing-allow-fail --json build/apple2_tn20k.json --write build/apple2_tn20k_pnr.json
+build/apple2_tn20k_pnr.json: build/apple2_tn20k.json $(CST) $(SDC)
+	nextpnr-gowin --device $(DEVICE) --vopt family=$(FAMILY) --vopt cst=$(CST) --sdc $(SDC) --ignore-loops --timing-allow-fail --json build/apple2_tn20k.json --write build/apple2_tn20k_pnr.json
 
 pack: build/apple2_tn20k.fs
 
@@ -41,7 +47,7 @@ flash-sram: build/apple2_tn20k.fs
 	openFPGALoader -b $(BOARD) -m build/apple2_tn20k.fs
 
 flash: build/apple2_tn20k.fs
-	openFPGALoader -b $(BOARD) build/apple2_tn20k.fs
+	openFPGALoader -b $(BOARD) -f build/apple2_tn20k.fs
 
 clean:
 	rm -rf build/apple2_tn20k.json build/apple2_tn20k_pnr.json build/apple2_tn20k.fs
