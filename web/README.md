@@ -83,19 +83,22 @@ into — Pages hosts the app, the bridge stays home, and the app dials it. Set
 
 ```sh
 cd web
-npm run pages        # build, check, copy into ../docs/web
+npm run pages        # build, check, copy into ../docs
 ```
 
-`docs/web/`, because this repo's `/docs` already holds the board
-documentation — Sipeed's datasheet and schematics — which is tracked and which
-a deploy must not touch. The site lands at
-`https://<owner>.github.io/<repo>/web/`, and `npm run pages` prints the URL.
+`docs/` is the site's root, so the app is `docs/index.html` plus `docs/assets/`
+and the site lands at `https://<owner>.github.io/<repo>/`. `npm run pages`
+prints the URL. The board documentation — Sipeed's datasheet and schematics —
+lives in `Documents/`, deliberately outside `docs/`, because **everything in
+`docs/` is published**. The deploy script refuses to run if it finds anything in
+`docs/` it did not put there, so a document dropped in the wrong place is a
+loud failure rather than a published one.
 
 Pages will not run the build itself unless you add a workflow, so the output
 is committed:
 
 ```sh
-git add docs/web && git commit -m "Publish the web front end" && git push
+git add docs && git commit -m "Publish the web front end" && git push
 ```
 
 Then set **Settings → Pages → Source** to *Deploy from a branch*, branch
@@ -237,7 +240,7 @@ src/
   components/       Keyboard, Console, Screen, DebuggerPane, Gamepad, FlashBar
 bridge/bridge.mjs   serial <-> WebSocket, port probe, origin policy, flash job
 scripts/charset.mjs roms/apple2e_char.hex -> src/generated/charset.json
-scripts/pages.mjs   build the Pages bundle, check it, copy to docs/web
+scripts/pages.mjs   build the Pages bundle, check it, copy to docs/
 test/               node --test
 ```
 

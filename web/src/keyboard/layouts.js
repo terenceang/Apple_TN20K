@@ -104,9 +104,13 @@ export const KEYS = [
   { id: 'caps', x: 0, y: 4, w: 1.25, legend: '⇩', mod: true, latch: true },
   // The two apple keys are the game paddles' pushbuttons, wired that way in
   // hardware: OPEN-APPLE is hand-control 0, SOLID-APPLE is hand-control 1.
-  { id: 'apple-o', x: 1.25, y: 4, legend: '🍏', mod: true },
+  // Their legends are drawn by components/AppleGlyph.tsx rather than put here:
+  // as emoji they render as blank boxes on any machine without an emoji font,
+  // and a //e with two blank keys where the apples should be is worse than a
+  // drawn one. 'open' and 'solid' are what the renderer looks for.
+  { id: 'apple-o', x: 1.25, y: 4, legend: 'open', mod: true },
   { id: 'space', x: 2.25, y: 4, w: 7.5, legend: '' },
-  { id: 'apple-c', x: 9.75, y: 4, legend: '🍎', mod: true },
+  { id: 'apple-c', x: 9.75, y: 4, legend: 'solid', mod: true },
   { id: 'left', x: 10.75, y: 4, legend: '←' },
   { id: 'right', x: 11.75, y: 4, legend: '→' },
   { id: 'down', x: 12.75, y: 4, legend: '↓' },
@@ -121,8 +125,50 @@ export const KEYS = [
 
 /** Board width in keycap units, for scaling. */
 export const BOARD_W = 16.5
-/** Board height in keycap units, including the Reset tier. */
+/** Board height in keycap units, including the Reset tier at y = -1. */
 export const BOARD_H = 6
+
+/**
+ * The key field's extent, in keycap units, derived from the keys themselves
+ * rather than declared separately -- so a key placed outside the board is a
+ * layout mistake this reports instead of one that only shows up as a cap
+ * sitting on the beige case instead of in the dark well.
+ *
+ * `top` is the y of the first row, which is -1 because RESET is on its own
+ * recessed tier above the keys. The renderer offsets by it, so the height here
+ * counts the Reset row too.
+ */
+export function boardBox(keys = KEYS) {
+  let right = 0
+  let bottom = -Infinity
+  let top = Infinity
+  for (const k of keys) {
+    right = Math.max(right, k.x + (k.w ?? 1))
+    top = Math.min(top, k.y)
+    bottom = Math.max(bottom, k.y + (k.h ?? 1))
+  }
+  // BOARD_W and BOARD_H are floors: the keys are the source of truth, and these
+  // stop the well shrinking if a key is ever removed from an edge.
+  return {
+    width: Math.max(right, BOARD_W),
+    height: Math.max(bottom - top, BOARD_H),
+    top,
+  }
+}
+
+/** Any key that would not fit inside the board, by id. */
+export function keysOutsideBoard(keys = KEYS) {
+  const box = boardBox(keys)
+  return keys
+    .filter(
+      (k) =>
+        k.x < 0 ||
+        k.y < box.top ||
+        k.y + (k.h ?? 1) > box.top + box.height + 0.01 ||
+        k.x + (k.w ?? 1) > box.width + 0.01,
+    )
+    .map((k) => k.id)
+}
 
 /**
  * What this layout deliberately does not have, so nobody helpfully adds it:

@@ -1,12 +1,11 @@
 // ============================================================================
 //  pages.mjs -- build the bundle GitHub Pages will serve, and check it
 //
-//  GitHub Pages for this repo can only be served from the root of a branch or
-//  from /docs, so the built output has to land inside the repository and be
-//  committed. It goes in docs/web/, not docs/ itself: /docs already holds the
-//  board documentation -- Sipeed's datasheet and schematics -- and those are
-//  tracked, so the deploy must not touch anything but its own subdirectory.
-//  The app ends up at https://<owner>.github.io/<repo>/web/.
+//  GitHub Pages for this repo can only be served from a branch root or from
+//  /docs, so the built output has to land in the repository and be committed.
+//  It is the whole content of docs/: index.html, assets/ and .nojekyll, served
+//  at https://<owner>.github.io/<repo>/. The board documentation lives in
+//  Documents/ and must stay out of there -- everything in docs/ is published.
 //
 //  Two things a plain `vite build` does not do, and this script is the
 //  difference between them and a script that just copies files:
@@ -18,13 +17,13 @@
 //       reason roms/*.hex is gitignored. PAGES=1 swaps that import for a
 //       stub and the app falls back to showing the screen as text.
 //
-//    2. It has to work from a subpath. Pages serves docs/web/ at /<repo>/web/,
-//       so absolute asset paths would 404.
+//    2. It has to work from a subpath. Pages serves a project site from
+//       /<repo>/, not /, so absolute asset paths would 404.
 //
 //  And then it checks its own work, because a leaked ROM is the kind of
 //  mistake nobody notices until it is up.
 //
-//      npm run pages            build, check, copy into ../docs/web
+//      npm run pages            build, check, copy into ../docs
 //      npm run pages:check      build and check, copy nothing
 // ============================================================================
 
@@ -38,11 +37,12 @@ const HERE = dirname(fileURLToPath(import.meta.url))
 const WEB = resolve(HERE, '..')
 const REPO = resolve(WEB, '..')
 const DIST = join(WEB, 'dist')
-const DOCS = join(REPO, 'docs')
-// Our own subdirectory inside docs/. Never docs/ itself: that holds the board
-// documentation and is tracked.
-const OUT = join(DOCS, 'web')
+// The whole content of docs/ is published, so this is the site root.
+const OUT = join(REPO, 'docs')
 const CHECK_ONLY = process.argv.includes('--check')
+
+/** Only these, so clearing docs/ cannot eat a document someone added. */
+const OURS = new Set(['index.html', 'assets', '.nojekyll'])
 
 const log = (...a) => console.log('[pages]', ...a)
 
@@ -136,23 +136,25 @@ if (CHECK_ONLY) {
   process.exit(0)
 }
 
-// Only ever clear our own subdirectory. docs/ itself holds the board
-// documentation and is tracked, and a deploy that wiped it would be very
-// hard to notice in the diff and impossible to undo by accident.
-if (relative(DOCS, OUT).startsWith('..')) {
-  console.error('[pages] FAIL: refusing to write outside docs/')
-  process.exit(1)
-}
+// Everything in docs/ gets published, so two things have to hold. Clearing
+// docs/ must not eat a document that was added there, and a document that *is*
+// there means the user is about to publish it, which they may not have meant.
 if (existsSync(OUT)) {
-  const before = await readdir(OUT)
-  if (before.some((f) => !['assets', 'index.html', '.nojekyll', 'favicon.ico'].includes(f))) {
-    console.error(`[pages] FAIL: docs/web/ holds files this script did not put there:`)
-    for (const f of before) console.error(`  ${f}`)
+  const present = await readdir(OUT)
+  const foreign = present.filter((f) => !OURS.has(f))
+  if (foreign.length) {
+    console.error('[pages] FAIL: docs/ holds files this script did not put there:')
+    for (const f of foreign) console.error(`  ${f}`)
+    console.error('')
+    console.error('Everything in docs/ is served by GitHub Pages. Move anything that')
+    console.error('should not be published -- the board documentation lives in')
+    console.error('Documents/ -- and try again.')
     process.exit(1)
   }
+  for (const f of present) await rm(join(OUT, f), { recursive: true, force: true })
+} else {
+  await mkdir(OUT, { recursive: true })
 }
-await rm(OUT, { recursive: true, force: true })
-await mkdir(OUT, { recursive: true })
 await cp(DIST, OUT, { recursive: true })
 
 // GitHub Pages runs Jekyll over a branch without this, and Jekyll ignores
@@ -164,8 +166,7 @@ for (const f of await jsFiles(OUT)) bytes += (await stat(f)).size
 log(`copied dist -> ${relative(REPO, OUT)}/ (${(bytes / 1024).toFixed(0)} KB of JavaScript)`)
 
 // The Pages URL, if we can work it out, because it is the thing you want next.
-// A project site is at <owner>.github.io/<repo>/, and this is a subdirectory of
-// that, so the path is /<repo>/web/ -- not /web/.
+// A project site is at <owner>.github.io/<repo>/, and docs/ is its root.
 let owner = ''
 let repoName = ''
 try {
@@ -183,7 +184,7 @@ try {
 }
 
 log('')
-if (owner && repoName) log(`  will be at  https://${owner}.github.io/${repoName}/web/`)
+if (owner && repoName) log(`  will be at  https://${owner}.github.io/${repoName}/`)
 log(`  commit ${relative(REPO, OUT)} and push to main to publish`)
 log('')
 log('The published site has no character ROM in it, so the screen pane shows')

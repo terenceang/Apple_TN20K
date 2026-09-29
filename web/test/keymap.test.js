@@ -10,11 +10,67 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { KEYS } from '../src/keyboard/layouts.js'
+import { KEYS, boardBox, keysOutsideBoard } from '../src/keyboard/layouts.js'
 import { resolve, isModifier, buttonFor, repertoire, keyIds, PADDLE_BUTTONS } from '../src/keymap.js'
+
+test('no keycap legend depends on an emoji font', () => {
+  // The two apple keys were the 1F34F/1F34E emoji and rendered as blank boxes
+  // on any machine without an emoji font -- a //e with two empty keys where
+  // its apple keys should be. They are drawn as SVG now, by AppleGlyph.tsx.
+  // Anything outside Latin-1 and the arrows would be a font gamble again.
+  const risky = KEYS.filter((k) => /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u.test(k.legend ?? ''))
+  assert.deepEqual(
+    risky.map((k) => `${k.id}:${k.legend}`),
+    [],
+    'these legends need an emoji font',
+  )
+})
+
+test('the apple keys are identified for the SVG renderer', () => {
+  const o = KEYS.find((k) => k.id === 'apple-o')
+  const c = KEYS.find((k) => k.id === 'apple-c')
+  assert.equal(o.legend, 'open')
+  assert.equal(c.legend, 'solid')
+  // and they are the two game buttons, at the sides of the space bar
+  assert.equal(buttonFor('apple-o'), 0b001)
+  assert.equal(buttonFor('apple-c'), 0b010)
+  const space = KEYS.find((k) => k.id === 'space')
+  const w = (k) => k.w ?? 1
+  // flanking the space bar: adjacent, not overlapping
+  assert.ok(o.x + w(o) <= space.x, 'Open-Apple is immediately left of SPACE')
+  assert.ok(c.x >= space.x + w(space), 'Solid-Apple is immediately right of SPACE')
+  assert.ok(c.x < (space.x + w(space) + 6), 'and not left stranded over on its own')
+})
 
 test('the board has the 63 keys of a //e', () => {
   assert.equal(KEYS.length, 63)
+})
+
+test('every key fits inside the key field', () => {
+  // The Reset tier sits at y = -1, so the board has to be tall enough to hold
+  // it. It used to be one row short, which put the whole bottom row -- CAPS
+  // LOCK, both apple keys, SPACE and all four arrows -- outside the dark key
+  // well, on the beige case. Caught by rendering the page, not by the tests.
+  assert.deepEqual(keysOutsideBoard(), [], 'keys outside the board')
+  const box = boardBox()
+  assert.equal(box.height, 6, 'six rows: the Reset tier and five of keys')
+  assert.equal(box.top, -1, 'the Reset tier is above the keys')
+  assert.ok(box.width >= 15, 'wide enough for the RETURN key at the right')
+})
+
+test('the arrangement is a left-to-right, top-to-bottom grid with no gaps in the rows', () => {
+  // Not a pixel-perfect check, just that no two keys share a slot, which would
+  // silently hide one behind another.
+  const slots = new Set()
+  for (const k of KEYS) {
+    for (let dx = 0; dx < (k.w ?? 1); dx++) {
+      for (let dy = 0; dy < (k.h ?? 1); dy++) {
+        const slot = `${Math.round((k.x + dx) * 2)}:${k.y + dy}`
+        assert.ok(!slots.has(slot), `${k.id} overlaps another key at ${slot}`)
+        slots.add(slot)
+      }
+    }
+  }
 })
 
 test('no REPT key, no function keys, no numeric keypad, no Mac *: key', () => {

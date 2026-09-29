@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
-import { KEYS, BOARD_W, BOARD_H, CAPTION } from '../keyboard/layouts.js'
+import { KEYS, boardBox, CAPTION } from '../keyboard/layouts.js'
 import { hostKey, isModifier, REPEAT_DELAY_MS, REPEAT_INTERVAL_MS } from '../keymap.js'
+import { AppleGlyph } from './AppleGlyph.js'
 import type { Mode } from '../useApple'
 
 interface Props {
@@ -134,13 +135,17 @@ export function Keyboard({ mode, onPress, held }: Props) {
 
   const legend = (k: Cap) => k.legend ?? ''
   const caption = (k: Cap) => CAPTION[k.id as keyof typeof CAPTION]
+  // Derived from the keys, not declared: the Reset tier is at y = -1, so the
+  // board has to be tall enough to hold it, and a key placed outside that would
+  // otherwise render on the beige case rather than in the dark key well.
+  const board = boardBox()
 
   return (
     <div className="keyboard-case">
       <div className="keyboard-bezel">
         <div
           className="board"
-          style={{ width: BOARD_W * UNIT, height: (BOARD_H - 1) * UNIT }}
+          style={{ width: board.width * UNIT, height: board.height * UNIT - 3 }}
           role="group"
           aria-label="Apple //e keyboard"
         >
@@ -160,8 +165,10 @@ export function Keyboard({ mode, onPress, held }: Props) {
                   'cap' + (isDown ? ' down' : '') + (k.mod ? ' mod' : '') + (k.latch ? ' latch' : '')
                 }
                 style={{
-                  left: (k.x + 0.5) * UNIT, // 0.5u inset: the bezel edge
-                  top: (k.y + 1) * UNIT,
+                  // 0.5u inset for the bezel edge; y is measured from the
+                  // Reset tier, which is a row above the keys
+                  left: (k.x + 0.5) * UNIT,
+                  top: (k.y - board.top) * UNIT,
                   width: k.w ? k.w * UNIT - 3 : UNIT - 3,
                   height: k.h ? k.h * UNIT - 3 : UNIT - 3,
                 }}
@@ -172,7 +179,11 @@ export function Keyboard({ mode, onPress, held }: Props) {
                 aria-label={k.id}
                 aria-pressed={isDown}
               >
-                {k.sub && <span className="cap-top">{legend(k)}</span>}
+                {legend(k) === 'open' || legend(k) === 'solid' ? (
+                  <AppleGlyph solid={legend(k) === 'solid'} />
+                ) : k.sub && (
+                  <span className="cap-top">{legend(k)}</span>
+                )}
                 {k.sub ? (
                   <span className="cap-bottom">{k.sub}</span>
                 ) : caption(k) ? (

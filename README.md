@@ -30,8 +30,12 @@ python3 -m http.server -d web/dist 8000   # http://localhost:8000
 
 To publish it: `cd web && npm run pages`, which builds without the Apple
 character ROM, checks that it really is not in there, and copies the result to
-`docs/web/`. Commit that and set **Settings &rarr; Pages** to serve `/docs`
-from `main`.
+`docs/`, which is the site's root. Commit that and set **Settings &rarr;
+Pages** to serve `/docs` from `main`; the site will be at
+`https://terenceang.github.io/Apple_TN20K/`.
+
+`docs/` is entirely published, so nothing that should not be public goes there
+— the board documentation lives in `Documents/`.
 
 A WebSocket bridge is included for a board plugged into *another* machine, for
 browsers without Web Serial, and for the flash buttons:

@@ -257,6 +257,7 @@ export const REPEAT_INTERVAL_MS = 100
 /** The //e's two game buttons, and only two. There is no third pushbutton on
  *  the keyboard; $C063 exists in the RTL and stays unused by this UI. */
 export const PADDLE_BUTTONS = [
-  { key: 'apple-o', label: '🍏 Open-Apple', bit: 0b001, which: 'paddle 0' },
-  { key: 'apple-c', label: '🍎 Solid-Apple', bit: 0b010, which: 'paddle 1' },
+  // No emoji in the labels either: see components/AppleGlyph.tsx.
+  { key: 'apple-o', label: 'Open-Apple', bit: 0b001, which: 'paddle 0' },
+  { key: 'apple-c', label: 'Solid-Apple', bit: 0b010, which: 'paddle 1' },
 ]

@@ -1,4 +1,5 @@
-import { PADDLE_BUTTONS } from '../keymap'
+import { PADDLE_BUTTONS } from '../keymap.js'
+import { AppleGlyph } from './AppleGlyph.js'
 
 interface Props {
   buttons: number
@@ -39,7 +40,7 @@ export function Gamepad({ buttons, x, y, onChange }: Props) {
             onPointerLeave={() => set(buttons & ~b.bit)}
             title={`Hand-control button ${b.which}`}
           >
-            {b.label}
+            <AppleGlyph solid={b.key === 'apple-c'} /> {b.label}
           </button>
         ))}
       </div>
