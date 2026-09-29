@@ -546,10 +546,10 @@ button.linkish:hover {
   text-transform: uppercase;
 }
 
-/* the apple keys: logos, and wider, as they are on the real board */
+/* the apple keys: the glyph is the whole legend, drawn as SVG */
 .cap[aria-label='apple-o'],
 .cap[aria-label='apple-c'] {
-  font-size: 15px;
+  font-size: 18px;
 }
 
 .cap[aria-label='reset'] {

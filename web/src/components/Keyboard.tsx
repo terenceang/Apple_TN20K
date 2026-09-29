@@ -134,6 +134,8 @@ export function Keyboard({ mode, onPress, held }: Props) {
   }
 
   const legend = (k: Cap) => k.legend ?? ''
+  /** The two apple keys, whose legend names the glyph rather than being text. */
+  const isApple = (k: Cap) => legend(k) === 'open' || legend(k) === 'solid'
   const caption = (k: Cap) => CAPTION[k.id as keyof typeof CAPTION]
   // Derived from the keys, not declared: the Reset tier is at y = -1, so the
   // board has to be tall enough to hold it, and a key placed outside that would
@@ -179,19 +181,24 @@ export function Keyboard({ mode, onPress, held }: Props) {
                 aria-label={k.id}
                 aria-pressed={isDown}
               >
-                {legend(k) === 'open' || legend(k) === 'solid' ? (
+                {isApple(k) ? (
+                  // The apple keys are only ever the glyph -- their legend in
+                  // layouts.js is 'open' or 'solid' to say which, not text to
+                  // print.
                   <AppleGlyph solid={legend(k) === 'solid'} />
-                ) : k.sub && (
-                  <span className="cap-top">{legend(k)}</span>
-                )}
-                {k.sub ? (
-                  <span className="cap-bottom">{k.sub}</span>
-                ) : caption(k) ? (
-                  <span className="cap-word">{caption(k)}</span>
                 ) : (
-                  <span className={legend(k).length > 2 ? 'cap-word' : 'cap-main'}>
-                    {legend(k)}
-                  </span>
+                  <>
+                    {k.sub && <span className="cap-top">{legend(k)}</span>}
+                    {k.sub ? (
+                      <span className="cap-bottom">{k.sub}</span>
+                    ) : caption(k) ? (
+                      <span className="cap-word">{caption(k)}</span>
+                    ) : (
+                      <span className={legend(k).length > 2 ? 'cap-word' : 'cap-main'}>
+                        {legend(k)}
+                      </span>
+                    )}
+                  </>
                 )}
               </button>
             )
