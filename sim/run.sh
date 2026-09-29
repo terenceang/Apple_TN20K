@@ -58,6 +58,11 @@ run_tb tb_data_island  $island
 # 1 kHz test tone out at ~900 Hz.  Nothing else caught it.
 run_tb tb_sound src/sound_generator.v
 
+# Host keyboard/gamepad protocol over the 115200-baud receiver: legacy ASCII,
+# the 0xFE key packet, the 0xFF gamepad packet, ANSI cursor keys, and Ctrl+B
+# staying out of the keyboard.
+run_tb tb_input src/input_controller.v
+
 # Apple video and colour bars through hdmi_tx, every pixel decoded from the
 # TMDS lanes (about a minute).
 # shellcheck disable=SC2086

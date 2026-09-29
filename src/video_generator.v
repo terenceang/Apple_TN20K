@@ -137,7 +137,12 @@ module video_generator (
     // Each of the 7 character dots spans 2 pixel clocks:
     // sub_col: 0..1 (dot 0), 2..3 (dot 1), ..., 12..13 (dot 6)
     wire [2:0] dot_index = sub_col[3:1]; // 0..6
-    wire pixel_on = ~glyph_byte[dot_index]; // Invert: 0 in ROM = bright dot
+    // A 1 in the character ROM is a lit dot, and dot_index 0 is the leftmost.
+    // (The 2732 stores glyphs that way: byte offset code*8 + row, top row
+    // first, bit 0 leftmost. The ROM bytes are used as they are -- the
+    // screen-scraping UI in web/ reads the same file and reproduces this
+    // address expression, so the two cannot drift apart.)
+    wire pixel_on = glyph_byte[dot_index];
 
     // Lo-Res graphics support:
     wire is_text_line = text_mode || (mixed_mode && (text_row >= 5'd20));

@@ -110,7 +110,13 @@ module tb_video_hdmi;
                 // Character ROM address as the //e video ROM wiring (flash off)
                 a   = {1'b0, c[7], c[6] & c[7], c[5:0], gr[2:0]};
                 g   = crom[a];
-                expect_apple = g[dot] ? 24'h020602 : 24'h20E820;
+                // A set bit in the character ROM is a lit dot. The 2732 stores
+                // glyph 1 -- what $41 reads, since char_rom_addr only carries
+                // six bits of the code -- as 08 14 22 22 3e 22 22 00, which is
+                // an A read this way, and glyph $20 (space) as all zeroes.
+                // web/test/charset.test.js pins the same convention against the
+                // real 342-0265-A dump.
+                expect_apple = g[dot] ? 24'h20E820 : 24'h020602;
             end
         end
     endfunction
@@ -195,10 +201,79 @@ module tb_video_hdmi;
     end
 
     // -----------------------------------------------------------------------
+    // The real character ROM, when it has been supplied
+    //
+    // The synthetic ROM above proves the *addressing* -- a wrong row, code or
+    // bank shows up as the wrong dots. It cannot prove the *polarity*, because
+    // a synthetic ROM has no letters in it. So also read the real 2732 and
+    // check the two things that settle how it is read: glyph $20, which is what
+    // $20 (space) resolves to, must be all zeroes, and glyph 1, which is what
+    // $41 ('A') resolves to because char_rom_addr carries only six bits of the
+    // code, must be a capital A read with a set bit meaning a lit dot.
+    //
+    // 342-0265-A, 4 KB. Run the video generator's expression by hand rather than
+    // through the generator, so this stays fast and independent.
+    // -----------------------------------------------------------------------
+    reg [7:0] realrom [0:4095];
+    reg       realrom_ok = 1'b0;
+    reg [7:0] real_file [0:65535];
+    integer   probe_fd;
+    initial begin
+        // $readmemh cannot report failure, so look for the file first.
+        probe_fd = $fopen("roms/apple2e_char.hex", "r");
+        if (probe_fd == 0) begin
+            $display("tb_video_hdmi: no roms/apple2e_char.hex, skipping the real-ROM check");
+        end else begin
+            $fclose(probe_fd);
+            $readmemh("roms/apple2e_char.hex", real_file);
+            for (i = 0; i < 4096; i = i + 1) realrom[i] = real_file[i];
+            realrom_ok = 1'b1;
+            $display("tb_video_hdmi: read the real 2732 from roms/apple2e_char.hex");
+        end
+    end
+
+    // $20 -> char_rom_addr bits [8:3] = 6'b100000 -> 0x100, so bytes 0x100..0x107
+    // $41 -> bits [8:3] = 6'b000001 -> 0x008, so bytes 0x008..0x00F
+    function [7:0] real_glyph_row;
+        input [15:0] code;
+        input [2:0]  row;
+        reg [11:0] a;
+        begin
+            // {1'b0, code[7], code[6]&code[7], code[5:0], row}, flash off
+            a = {1'b0, code[7], code[6] & code[7], code[5:0], row};
+            real_glyph_row = realrom[a];
+        end
+    endfunction
+
+    task check_real_rom;
+        integer r;
+        reg [7:0] arow [0:7];
+        begin
+            // space: blank
+            for (r = 0; r < 8; r = r + 1) arow[r] = real_glyph_row(16'h0020, r[2:0]);
+            for (r = 0; r < 8; r = r + 1) begin
+                if (arow[r] !== 8'h00) begin
+                    $display("FAIL: real ROM space row %0d is %02h, not 00", r, arow[r]);
+                    errors = errors + 1;
+                end
+            end
+            // 'A' at glyph 1, as a 7x8 picture with a set bit meaning lit
+            for (r = 0; r < 8; r = r + 1) arow[r] = real_glyph_row(16'h0041, r[2:0]);
+            if (arow[0] !== 8'h08 || arow[1] !== 8'h14 || arow[4] !== 8'h3E ||
+                arow[7] !== 8'h00) begin
+                $display("FAIL: real ROM 'A' rows are %02h %02h %02h ... %02h, expected 08 14 .. 3E .. 00",
+                         arow[0], arow[1], arow[2], arow[7]);
+                errors = errors + 1;
+            end
+        end
+    endtask
+
+    // -----------------------------------------------------------------------
     // Stimulus
     // -----------------------------------------------------------------------
     integer i, frame_a_checked;
     initial begin
+        if (realrom_ok) check_real_rom();
         // Synthetic char ROM: every glyph row distinct, so a wrong address
         // (row, code or bank) shows up as a different dot pattern.
         for (i = 0; i < 4096; i = i + 1)

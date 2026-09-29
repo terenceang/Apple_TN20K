@@ -109,6 +109,9 @@ module top (
         .cpu_we(debug_cpu_we),
         .cpu_sync(debug_cpu_sync),
         .text_mode(text_mode),
+        .mixed_mode(mixed_mode),
+        .page2(page2),
+        .hires_mode(hires_mode),
         .pll_locked(pll_locked)
     );
 

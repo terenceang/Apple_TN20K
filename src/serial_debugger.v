@@ -6,6 +6,14 @@
 //    - Mirrors all Apple //e screen/Monitor text output (COUT / $FDED) to UART TX.
 //    - Direct Apple II software UART output via writes to $C088 (Slot 1) or $C098 (Slot 2).
 //    - Pass-through keyboard input to Apple //e.
+//
+// Debugger commands (Ctrl+B enters, Ctrl+B or 'c' leaves):
+//   r  registers, s  step one instruction, c/g  continue, m  16 bytes of memory
+//   t  video and PLL status, w  dump the visible text page and, in mixed
+//      mode, the graphics page behind the bottom four lines
+//   h/?  help, x  CPU reset, CR  repeat the prompt
+//   0 1 4 8 f v  set the memory dump address ($0000 $0100 $0400 $0800
+//      $FA60 $FFF0) before m
 // 2. Hardware Debugger Mode (Toggle with Ctrl+B / ASCII 0x02):
 //    - Freezes 65C02 CPU execution (RDY = 0).
 //    - Commands:
@@ -53,7 +61,11 @@ module serial_debugger (
     input  wire        cpu_sync,
 
     // Hardware Status Inputs
+    // Softswitch state, for the W (screen dump) command
     input  wire        text_mode,
+    input  wire        mixed_mode,
+    input  wire        page2,
+    input  wire        hires_mode,
     input  wire        pll_locked
 );
 
@@ -154,36 +166,42 @@ module serial_debugger (
     reg       slot_tx_pend = 1'b0;
 
     // =========================================================================
-    // 4. Static String Table ROM (160 Bytes)
+    // 4. Static String Table ROM (178 Bytes)
     // =========================================================================
     localparam STR_BANNER_START = 8'd0;
     localparam STR_BANNER_LEN   = 8'd45;
     localparam STR_RESUME_START = 8'd45;
     localparam STR_RESUME_LEN   = 8'd17;
-    localparam STR_HELP_START   = 8'd62;
-    localparam STR_HELP_LEN     = 8'd57;
+    localparam STR_HELP_START = 8'd62;
+    localparam STR_HELP_LEN   = 8'd58;
     localparam STR_PROMPT_START = 8'd119;
     localparam STR_PROMPT_LEN   = 8'd4;
-    localparam STR_PC_LBL_START = 8'd123;
+    localparam STR_PC_LBL_START = 8'd124;
     localparam STR_PC_LBL_LEN   = 8'd6;
-    localparam STR_A_LBL_START  = 8'd129;
+    localparam STR_A_LBL_START  = 8'd130;
     localparam STR_A_LBL_LEN    = 8'd4;
-    localparam STR_X_LBL_START  = 8'd133;
+    localparam STR_X_LBL_START  = 8'd134;
     localparam STR_X_LBL_LEN    = 8'd4;
-    localparam STR_Y_LBL_START  = 8'd137;
+    localparam STR_Y_LBL_START  = 8'd138;
     localparam STR_Y_LBL_LEN    = 8'd4;
-    localparam STR_S_LBL_START  = 8'd141;
+    localparam STR_S_LBL_START  = 8'd142;
     localparam STR_S_LBL_LEN    = 8'd5;
-    localparam STR_P_LBL_START  = 8'd146;
+    localparam STR_P_LBL_START  = 8'd147;
     localparam STR_P_LBL_LEN    = 8'd4;
-    localparam STR_OP_LBL_START = 8'd150;
+    localparam STR_OP_LBL_START = 8'd151;
     localparam STR_OP_LBL_LEN   = 8'd6;
-    localparam STR_BAR_SP_START = 8'd156;
+    localparam STR_BAR_SP_START = 8'd157;
     localparam STR_BAR_SP_LEN   = 8'd2;
-    localparam STR_CRLF_START   = 8'd158;
+    localparam STR_CRLF_START   = 8'd159;
     localparam STR_CRLF_LEN     = 8'd2;
+    localparam STR_SCR_START    = 8'd161;
+    localparam STR_SCR_LEN      = 8'd5;
+    localparam STR_GFX_START    = 8'd166;
+    localparam STR_GFX_LEN      = 8'd5;
+    localparam STR_END_START    = 8'd171;
+    localparam STR_END_LEN      = 8'd7;
 
-    reg [7:0] str_rom [0:159];
+    reg [7:0] str_rom [0:177];
     initial begin
         str_rom[0] = 8'h0D; str_rom[1] = 8'h0A; str_rom[2] = 8'h5B; str_rom[3] = 8'h20;
         str_rom[4] = 8'h41; str_rom[5] = 8'h70; str_rom[6] = 8'h70; str_rom[7] = 8'h6C;
@@ -200,31 +218,42 @@ module serial_debugger (
         str_rom[48] = 8'h52; str_rom[49] = 8'h65; str_rom[50] = 8'h73; str_rom[51] = 8'h75;
         str_rom[52] = 8'h6D; str_rom[53] = 8'h69; str_rom[54] = 8'h6E; str_rom[55] = 8'h67;
         str_rom[56] = 8'h2E; str_rom[57] = 8'h2E; str_rom[58] = 8'h2E; str_rom[59] = 8'h5D;
-        str_rom[60] = 8'h0D; str_rom[61] = 8'h0A; str_rom[62] = 8'h0D; str_rom[63] = 8'h0A;
-        str_rom[64] = 8'h43; str_rom[65] = 8'h6D; str_rom[66] = 8'h64; str_rom[67] = 8'h73;
-        str_rom[68] = 8'h3A; str_rom[69] = 8'h20; str_rom[70] = 8'h72; str_rom[71] = 8'h3D;
-        str_rom[72] = 8'h52; str_rom[73] = 8'h65; str_rom[74] = 8'h67; str_rom[75] = 8'h73;
-        str_rom[76] = 8'h2C; str_rom[77] = 8'h20; str_rom[78] = 8'h73; str_rom[79] = 8'h3D;
-        str_rom[80] = 8'h53; str_rom[81] = 8'h74; str_rom[82] = 8'h65; str_rom[83] = 8'h70;
-        str_rom[84] = 8'h2C; str_rom[85] = 8'h20; str_rom[86] = 8'h63; str_rom[87] = 8'h3D;
-        str_rom[88] = 8'h43; str_rom[89] = 8'h6F; str_rom[90] = 8'h6E; str_rom[91] = 8'h74;
-        str_rom[92] = 8'h2C; str_rom[93] = 8'h20; str_rom[94] = 8'h6D; str_rom[95] = 8'h3D;
-        str_rom[96] = 8'h4D; str_rom[97] = 8'h65; str_rom[98] = 8'h6D; str_rom[99] = 8'h2C;
-        str_rom[100] = 8'h20; str_rom[101] = 8'h74; str_rom[102] = 8'h3D; str_rom[103] = 8'h53;
-        str_rom[104] = 8'h74; str_rom[105] = 8'h61; str_rom[106] = 8'h74; str_rom[107] = 8'h2C;
-        str_rom[108] = 8'h20; str_rom[109] = 8'h68; str_rom[110] = 8'h3D; str_rom[111] = 8'h48;
-        str_rom[112] = 8'h65; str_rom[113] = 8'h6C; str_rom[114] = 8'h70; str_rom[115] = 8'h0D;
-        str_rom[116] = 8'h0A; str_rom[117] = 8'h3E; str_rom[118] = 8'h20; str_rom[119] = 8'h0D;
-        str_rom[120] = 8'h0A; str_rom[121] = 8'h3E; str_rom[122] = 8'h20; str_rom[123] = 8'h0D;
-        str_rom[124] = 8'h0A; str_rom[125] = 8'h50; str_rom[126] = 8'h43; str_rom[127] = 8'h3A;
-        str_rom[128] = 8'h24; str_rom[129] = 8'h20; str_rom[130] = 8'h41; str_rom[131] = 8'h3A;
-        str_rom[132] = 8'h24; str_rom[133] = 8'h20; str_rom[134] = 8'h58; str_rom[135] = 8'h3A;
-        str_rom[136] = 8'h24; str_rom[137] = 8'h20; str_rom[138] = 8'h59; str_rom[139] = 8'h3A;
-        str_rom[140] = 8'h24; str_rom[141] = 8'h20; str_rom[142] = 8'h53; str_rom[143] = 8'h50;
-        str_rom[144] = 8'h3A; str_rom[145] = 8'h24; str_rom[146] = 8'h20; str_rom[147] = 8'h50;
-        str_rom[148] = 8'h3A; str_rom[149] = 8'h5B; str_rom[150] = 8'h5D; str_rom[151] = 8'h20;
-        str_rom[152] = 8'h4F; str_rom[153] = 8'h50; str_rom[154] = 8'h3A; str_rom[155] = 8'h24;
-        str_rom[156] = 8'h20; str_rom[157] = 8'h7C; str_rom[158] = 8'h0D; str_rom[159] = 8'h0A;
+        str_rom[60] = 8'h0D; str_rom[61] = 8'h0A;
+        // Help: "\r\nCmds: r=Regs s=Step c=Cont m=Mem t=Stat w=Scr h=Help\r\n> "
+        str_rom[62] = 8'h0D; str_rom[63] = 8'h0A; str_rom[64] = 8'h43; str_rom[65] = 8'h6D;
+        str_rom[66] = 8'h64; str_rom[67] = 8'h73; str_rom[68] = 8'h3A; str_rom[69] = 8'h20;
+        str_rom[70] = 8'h72; str_rom[71] = 8'h3D; str_rom[72] = 8'h52; str_rom[73] = 8'h65;
+        str_rom[74] = 8'h67; str_rom[75] = 8'h73; str_rom[76] = 8'h20; str_rom[77] = 8'h73;
+        str_rom[78] = 8'h3D; str_rom[79] = 8'h53; str_rom[80] = 8'h74; str_rom[81] = 8'h65;
+        str_rom[82] = 8'h70; str_rom[83] = 8'h20; str_rom[84] = 8'h63; str_rom[85] = 8'h3D;
+        str_rom[86] = 8'h43; str_rom[87] = 8'h6F; str_rom[88] = 8'h6E; str_rom[89] = 8'h74;
+        str_rom[90] = 8'h20; str_rom[91] = 8'h6D; str_rom[92] = 8'h3D; str_rom[93] = 8'h4D;
+        str_rom[94] = 8'h65; str_rom[95] = 8'h6D; str_rom[96] = 8'h20; str_rom[97] = 8'h74;
+        str_rom[98] = 8'h3D; str_rom[99] = 8'h53; str_rom[100] = 8'h74; str_rom[101] = 8'h61;
+        str_rom[102] = 8'h74; str_rom[103] = 8'h20; str_rom[104] = 8'h77; str_rom[105] = 8'h3D;
+        str_rom[106] = 8'h53; str_rom[107] = 8'h63; str_rom[108] = 8'h72; str_rom[109] = 8'h20;
+        str_rom[110] = 8'h68; str_rom[111] = 8'h3D; str_rom[112] = 8'h48; str_rom[113] = 8'h65;
+        str_rom[114] = 8'h6C; str_rom[115] = 8'h70; str_rom[116] = 8'h0D; str_rom[117] = 8'h0A;
+        str_rom[118] = 8'h3E; str_rom[119] = 8'h20;
+        // Prompt "\r\n> "
+        str_rom[120] = 8'h0D; str_rom[121] = 8'h0A; str_rom[122] = 8'h3E; str_rom[123] = 8'h20;
+        // Register line labels
+        str_rom[124] = 8'h0D; str_rom[125] = 8'h0A; str_rom[126] = 8'h50; str_rom[127] = 8'h43;
+        str_rom[128] = 8'h3A; str_rom[129] = 8'h24; str_rom[130] = 8'h20; str_rom[131] = 8'h41;
+        str_rom[132] = 8'h3A; str_rom[133] = 8'h24; str_rom[134] = 8'h20; str_rom[135] = 8'h58;
+        str_rom[136] = 8'h3A; str_rom[137] = 8'h24; str_rom[138] = 8'h20; str_rom[139] = 8'h59;
+        str_rom[140] = 8'h3A; str_rom[141] = 8'h24; str_rom[142] = 8'h20; str_rom[143] = 8'h53;
+        str_rom[144] = 8'h50; str_rom[145] = 8'h3A; str_rom[146] = 8'h24; str_rom[147] = 8'h20;
+        str_rom[148] = 8'h50; str_rom[149] = 8'h3A; str_rom[150] = 8'h5B; str_rom[151] = 8'h5D;
+        str_rom[152] = 8'h20; str_rom[153] = 8'h4F; str_rom[154] = 8'h50; str_rom[155] = 8'h3A;
+        str_rom[156] = 8'h24; str_rom[157] = 8'h20; str_rom[158] = 8'h7C; str_rom[159] = 8'h0D;
+        str_rom[160] = 8'h0A;
+        // Screen dump framing: "\r\n$SS", "\r\n$GF", "\r\n$SEND"
+        str_rom[161] = 8'h0D; str_rom[162] = 8'h0A; str_rom[163] = 8'h24; str_rom[164] = 8'h53;
+        str_rom[165] = 8'h53; str_rom[166] = 8'h0D; str_rom[167] = 8'h0A; str_rom[168] = 8'h24;
+        str_rom[169] = 8'h47; str_rom[170] = 8'h46; str_rom[171] = 8'h0D; str_rom[172] = 8'h0A;
+        str_rom[173] = 8'h24; str_rom[174] = 8'h53; str_rom[175] = 8'h45; str_rom[176] = 8'h4E;
+        str_rom[177] = 8'h44;
     end
 
     // String printer sub-engine
@@ -237,6 +266,13 @@ module serial_debugger (
     reg [2:0]  hex_digits = 3'd0;
     wire hex_busy = (hex_digits != 3'd0);
 
+    // Which received bytes the console echo passes through. Anything else is
+    // protocol: the 0xFE key packet and the 0xFF gamepad packet must not be
+    // reflected into the terminal as text.
+    wire echoable = (rx_byte >= 8'h20 && rx_byte <= 8'h7E) ||
+                    (rx_byte == 8'h0D) || (rx_byte == 8'h0A) ||
+                    (rx_byte == 8'h08) || (rx_byte == 8'h07);
+
     // =========================================================================
     // 5. Hardware Debugger State Machine & Micro-Sequencer
     // =========================================================================
@@ -246,6 +282,18 @@ module serial_debugger (
     localparam M_REGS    = 4'd3;
     localparam M_MEM     = 4'd4;
     localparam M_STATUS  = 4'd5;
+    localparam M_SCREEN  = 4'd6;
+
+    // Screen dump state. The W command streams the text page the video
+    // generator is showing, plus the graphics page the bottom four lines use
+    // in mixed mode, so a host can redraw the screen exactly. Only reachable
+    // while the CPU is paused, which is what makes the read race-free: nothing
+    // can rewrite $0400 while dbg_mode is set.
+    reg [15:0] scr_addr  = 16'h0400;
+    reg [10:0] scr_left  = 11'd0;   // bytes still to print
+    reg [5:0]  scr_col   = 6'd0;    // 0..39 text columns, 0..31 graphics
+    reg [2:0]  scr_wait  = 3'd0;    // settle cycles between RAM reads
+    reg [7:0]  scr_flags = 8'h00;
 
     reg [3:0] main_state = M_IDLE;
     reg [3:0] return_job = M_IDLE;
@@ -301,6 +349,11 @@ module serial_debugger (
             slot_tx_pend   <= 1'b0;
             mem_col        <= 4'd0;
             mem_wait       <= 3'd0;
+            scr_addr       <= 16'h0400;
+            scr_left       <= 11'd0;
+            scr_col        <= 6'd0;
+            scr_wait       <= 3'd0;
+            scr_flags      <= 8'h00;
         end else begin
             fifo_push_en <= 1'b0;
 
@@ -397,7 +450,11 @@ module serial_debugger (
                     main_state <= M_STR;
                 end
             end else if (!dbg_mode && (main_state == M_IDLE) && rx_valid) begin
-                if (!tx_fifo_full) begin
+                // Echo console keystrokes back so the host sees what it typed.
+                // Only characters a terminal can show: the 0xFE key packet and
+                // the 0xFF gamepad packet are protocol, not text, and used to
+                // land in the console as five or three junk bytes each.
+                if (!tx_fifo_full && echoable) begin
                     fifo_push(rx_byte);
                 end
             end else if (dbg_mode && (main_state == M_IDLE) && rx_valid) begin
@@ -449,6 +506,11 @@ module serial_debugger (
 
                     "t", "T": begin
                         main_state <= M_STATUS;
+                        seq_step   <= 5'd0;
+                    end
+
+                    "w", "W": begin
+                        main_state <= M_SCREEN;
                         seq_step   <= 5'd0;
                     end
 
@@ -752,6 +814,140 @@ module serial_debugger (
                         5'd10: if (!tx_fifo_full) begin fifo_push(":"); seq_step <= 5'd11; end
                         5'd11: if (!tx_fifo_full) begin fifo_push(pll_locked ? "1" : "0"); seq_step <= 5'd12; end
                         5'd12: begin
+                            str_pos    <= STR_PROMPT_START;
+                            str_cnt    <= STR_PROMPT_LEN;
+                            return_job <= M_IDLE;
+                            main_state <= M_STR;
+                        end
+                        default: main_state <= M_IDLE;
+                    endcase
+                end
+
+                // -------------------------------------------------------------
+                // Screen Dump Sequencer
+                //
+                // Wire format, all hex text so a plain terminal can read it too:
+                //
+                //   $SS <flags>          one flag byte, then
+                //                         <40 bytes>  x24   text page, one row each
+                //   $GF <32 bytes>  x4   graphics page rows 20-23, mixed mode only
+                //   $SEND
+                //
+                // Text rows are 40 bytes of $0400/$0800 in the same interleaved
+                // order video_generator.v reads them, so the host can index
+                // them directly. Bit 7 of each byte is inverse video, not part
+                // of the character.
+                // -------------------------------------------------------------
+                M_SCREEN: begin
+                    case (seq_step)
+                        5'd0: begin // "\r\n$SS"
+                            scr_flags <= {2'b00, pll_locked, hires_mode, mixed_mode,
+                                          page2, text_mode};
+                            str_pos    <= STR_SCR_START;
+                            str_cnt    <= STR_SCR_LEN;
+                            return_job <= M_SCREEN;
+                            seq_step   <= 5'd1;
+                            main_state <= M_STR;
+                        end
+                        5'd1: if (!tx_fifo_full) begin // flags byte
+                            fifo_push(" ");
+                            hex_val    <= {scr_flags, 8'h00};
+                            hex_digits <= 3'd2;
+                            return_job <= M_SCREEN;
+                            seq_step   <= 5'd2;
+                            main_state <= M_HEX;
+                        end
+                        5'd2: if (!tx_fifo_full) begin // start of text page
+                            fifo_push(" ");
+                            scr_addr <= page2 ? 16'h0800 : 16'h0400;
+                            scr_left <= 11'd1024;
+                            scr_col  <= 6'd0;
+                            scr_wait <= 3'd0;
+                            seq_step <= 5'd3;
+                        end
+                        5'd3: begin
+                            if (scr_left == 11'd0) begin
+                                seq_step <= 5'd6;
+                            end else begin
+                                // Same read-settle pattern as the memory dump:
+                                // the RAM answer lands a few cycles after the
+                                // address is presented, and dbg_mem_din is
+                                // combinational off the current dbg_mem_addr.
+                                dbg_mem_addr <= scr_addr;
+                                if (scr_wait < 3'd4) begin
+                                    scr_wait <= scr_wait + 1'b1;
+                                end else begin
+                                    scr_wait   <= 3'd0;
+                                    scr_addr   <= scr_addr + 16'd1;
+                                    scr_left   <= scr_left - 11'd1;
+                                    scr_col    <= scr_col + 1'b1;
+                                    hex_val    <= {dbg_mem_din, 8'h00};
+                                    hex_digits <= 3'd2;
+                                    return_job <= M_SCREEN;
+                                    main_state <= M_HEX;
+                                    seq_step   <= 5'd4;
+                                end
+                            end
+                        end
+                        5'd4: if (scr_col == 6'd40) begin // end of a text row
+                            scr_col    <= 6'd0;
+                            str_pos    <= STR_CRLF_START;
+                            str_cnt    <= STR_CRLF_LEN;
+                            return_job <= M_SCREEN;
+                            main_state <= M_STR;
+                        end else begin
+                            seq_step <= 5'd3;
+                        end
+                        5'd6: if (!tx_fifo_full) begin // "\r\n$GF"
+                            // In mixed mode the bottom four lines are graphics
+                            // taken from the page the text is not on.
+                            str_pos    <= STR_GFX_START;
+                            str_cnt    <= STR_GFX_LEN;
+                            return_job <= M_SCREEN;
+                            main_state <= M_STR;
+                            scr_addr   <= (page2 ? 16'h0400 : 16'h0800) + 16'h0500;
+                            scr_left   <= 11'd128;
+                            scr_col    <= 6'd0;
+                            scr_wait   <= 3'd0;
+                            seq_step   <= 5'd7;
+                        end
+                        5'd7: begin
+                            if (scr_left == 11'd0) begin
+                                seq_step <= 5'd9;
+                            end else begin
+                                dbg_mem_addr <= scr_addr;
+                                if (scr_wait < 3'd4) begin
+                                    scr_wait <= scr_wait + 1'b1;
+                                end else begin
+                                    scr_wait   <= 3'd0;
+                                    scr_addr   <= scr_addr + 16'd1;
+                                    scr_left   <= scr_left - 11'd1;
+                                    scr_col    <= scr_col + 1'b1;
+                                    hex_val    <= {dbg_mem_din, 8'h00};
+                                    hex_digits <= 3'd2;
+                                    return_job <= M_SCREEN;
+                                    main_state <= M_HEX;
+                                    seq_step   <= 5'd8;
+                                end
+                            end
+                        end
+                        5'd8: if (scr_col == 6'd32) begin
+                            scr_col    <= 6'd0;
+                            str_pos    <= STR_CRLF_START;
+                            str_cnt    <= STR_CRLF_LEN;
+                            return_job <= M_SCREEN;
+                            main_state <= M_STR;
+                        end else begin
+                            seq_step <= 5'd7;
+                        end
+                        5'd9: if (!tx_fifo_full) begin // "\r\n$SEND" then prompt
+                            str_pos    <= STR_END_START;
+                            str_cnt    <= STR_END_LEN;
+                            return_job <= M_SCREEN;
+                            main_state <= M_STR;
+                            seq_step   <= 5'd10;
+                        end
+                        5'd10: begin
                             str_pos    <= STR_PROMPT_START;
                             str_cnt    <= STR_PROMPT_LEN;
                             return_job <= M_IDLE;

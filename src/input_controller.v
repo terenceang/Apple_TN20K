@@ -1,5 +1,22 @@
 // Apple //e Input Controller for Tang Nano 20K
 // Handles UART RX (115200 baud) for Bluetooth-to-UART / USB-C keyboard & gamepad
+//
+// Host-to-Apple protocol, all at 115200 8N1:
+//
+//   0x02                     toggle the hardware debugger in serial_debugger
+//   0xFE <code> <buttons>    one keypress: <code> is the final 7-bit Apple II
+//                            key code, <buttons> bit0/1/2 = PB0/PB1/PB2
+//   0xFF 0x01 <b> <x> <y>    gamepad: buttons, paddle 0, paddle 1
+//   0x1B '[' A|B|C|D         cursor keys, mapped to 0x0B/0x0A/0x15/0x08
+//   anything else            a single ASCII keystroke
+//
+// 0xFE is a packet leader, so a dumb terminal that sends a raw 0xFE for '~'
+// now starts a key packet instead of typing '~'; send "FE 7E 00" for that
+// character. The key packet is why shift and caps lock are resolved by the
+// sender: on real hardware the Apple IIe keyboard PROM (341-0132-D) turns a
+// key position plus the shift/caps lines into the character in $C000, and the
+// Apple II ROMs take D6-D0 as the final character, so nothing downstream needs
+// to know a modifier was held.
 
 module input_controller (
     input  wire        clk,           // 27.0 MHz
@@ -104,7 +121,7 @@ module input_controller (
     end
 
     // Keyboard & Gamepad Registers
-    reg [7:0] kbd_data = 8'h00; // Bit 7: strobe, Bits 6:0: ASCII key
+    reg [7:0] kbd_data = 8'h00; // Bit 7: strobe, Bits 6:0: final key code
     reg       pb0 = 1'b0;       // Pushbutton 0 ($C061 - Open Apple)
     reg       pb1 = 1'b0;       // Pushbutton 1 ($C062 - Solid Apple)
     reg       pb2 = 1'b0;       // Pushbutton 2 ($C063)
@@ -136,15 +153,18 @@ module input_controller (
     // 1. Standard ASCII: 0x01..0x7E, 0x0D (Return), 0x08/0x7F (Backspace)
     // 2. ANSI Escape Sequences: ESC [ A/B/C/D (Up/Down/Right/Left)
     // 3. Gamepad Packet: 0xFF 0x01 <buttons> <joy_x> <joy_y>
-    localparam PKT_NORMAL = 3'd0;
-    localparam PKT_ESC    = 3'd1;
-    localparam PKT_BRACKET= 3'd2;
-    localparam PKT_GP_HDR = 3'd3;
-    localparam PKT_GP_BTN = 3'd4;
-    localparam PKT_GP_X   = 3'd5;
-    localparam PKT_GP_Y   = 3'd6;
+    // 4. Key Packet: 0xFE <code> <buttons>  (see below)
+    localparam PKT_NORMAL = 4'd0;
+    localparam PKT_ESC    = 4'd1;
+    localparam PKT_BRACKET= 4'd2;
+    localparam PKT_GP_HDR = 4'd3;
+    localparam PKT_GP_BTN = 4'd4;
+    localparam PKT_GP_X   = 4'd5;
+    localparam PKT_GP_Y   = 4'd6;
+    localparam PKT_KEY_CODE= 4'd8;
+    localparam PKT_KEY_BTN= 4'd9;
 
-    reg [2:0] pkt_state = PKT_NORMAL;
+    reg [3:0] pkt_state = PKT_NORMAL;
 
     always @(posedge clk or posedge reset) begin
         if (reset) begin
@@ -166,6 +186,9 @@ module input_controller (
                     PKT_NORMAL: begin
                         if (urx_byte == 8'hFF) begin
                             pkt_state <= PKT_GP_HDR;
+                        end else if (urx_byte == 8'hFE) begin
+                            // 0xFE is only a leader; the code is the next byte
+                            pkt_state <= PKT_KEY_CODE;
                         end else if (urx_byte == 8'h1B) begin // ESC
                             pkt_state <= PKT_ESC;
                         end else begin
@@ -222,6 +245,25 @@ module input_controller (
 
                     PKT_GP_Y: begin
                         joy_pdl1  <= urx_byte;
+                        pkt_state <= PKT_NORMAL;
+                    end
+
+                    // 0xFE <code> <buttons>: one keypress with the paddle
+                    // button state that goes with it. <code> is the final
+                    // 7-bit Apple II key code (shift and caps lock already
+                    // resolved by the sender, which is the job the Apple IIe
+                    // keyboard PROM does on real hardware). <buttons> bits
+                    // 0/1/2 are PB0/PB1/PB2, so the Open-Apple and Solid-Apple
+                    // keys drive the game paddles the way they do in hardware.
+                    PKT_KEY_CODE: begin
+                        kbd_data  <= {1'b1, urx_byte[6:0]};
+                        pkt_state <= PKT_KEY_BTN;
+                    end
+
+                    PKT_KEY_BTN: begin
+                        pb0 <= urx_byte[0];
+                        pb1 <= urx_byte[1];
+                        pb2 <= urx_byte[2];
                         pkt_state <= PKT_NORMAL;
                     end
 
