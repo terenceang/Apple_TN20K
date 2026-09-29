@@ -10,9 +10,8 @@ browser ──Web Serial──▶  USB ──▶  BL616  ──▶  FPGA
 
 **With the board plugged into the machine running the browser, that is the whole
 thing.** There is no daemon, no Node process and nothing to install: the app is
-a static bundle and the browser opens the serial port itself. The WebSocket
-bridge below is a fallback, for a board on another machine and for browsers
-that have no Web Serial.
+a static bundle and the browser opens the serial port itself. Web Serial is the
+only transport; there is no fallback for other machines or other browsers.
 
 ## Running it
 
@@ -49,37 +48,15 @@ That is the only way to be sure, and it costs about 20 ms.
 
 ## Requirements for the USB path
 
-- **Chrome or Edge.** Firefox and Safari have no Web Serial. That is what the
-  bridge is for.
+- **Chrome or Edge.** Firefox and Safari have no Web Serial, and there is no
+  fallback transport.
 - **https or localhost**, for a secure context.
 - A click to connect, because the browser will only open the device picker from
   a user gesture. That is why there is a button rather than an auto-connect.
 
-## The bridge (optional)
-
-`bridge/bridge.mjs` is a small Node process that holds the serial port and
-serves a WebSocket in its place. Reach for it when the board is plugged into
-some *other* machine, or in a browser without Web Serial. It is also the only
-way to use the **flash buttons**, which need a subprocess to run
-`openFPGALoader`.
-
-```sh
-make bridge               # http://127.0.0.1:8781
-make bridge BRIDGE=scripts/bridge.sh --port /dev/ttyUSB0
-```
-
-Then press **Use a bridge instead** in the app. `endpoint.js` works out where it
-is, first match wins: a `?ws=` query parameter (remembered afterwards),
-whatever was typed into the box, `VITE_WS` if it was set at build time, then
-the page's own address — which is right when the bridge is serving the app
-itself.
-
 ### Hosting the page on GitHub Pages
 
-The **page** is static and can live anywhere. The **bridge cannot**, because it
-holds `/dev/ttyUSB0` and so has to run on the machine the board is plugged
-into — Pages hosts the app, the bridge stays home, and the app dials it. Set
-`VITE_WS=ws://127.0.0.1:8781/ws` at build time so it knows where to look.
+The page is static and can live anywhere; it needs nothing but `https`.
 
 ```sh
 cd web
@@ -114,23 +91,6 @@ screen pane shows text rather than the real //e glyphs and says so; a local
 build still has them. `scripts/pages.mjs` checks the built output for the ROM
 and **refuses to copy** if it is there anyway, and the check is verified to
 fail when the swap is disabled.
-
-A loopback URL counts as *potentially trustworthy* in the URL standard, so
-`ws://127.0.0.1` from an `https://` page is not mixed content and browsers
-allow it. If yours refuses, run the bridge behind TLS with `--tls-cert` and
-`--tls-key`.
-
-The bridge checks the page's `Origin` itself, because a WebSocket upgrade is
-not subject to CORS and the bridge can otherwise type into the //e, read its
-RAM and flash it for any site the user visits. Loopback pages and scripts pass;
-anything else has to be named:
-
-```sh
-WEB_ORIGIN=https://yourname.github.io scripts/bridge.sh
-```
-
-This problem disappears entirely on the USB path, which is a good reason to
-prefer it. See **Security** below for the rest.
 
 ### The character ROM
 
@@ -203,8 +163,9 @@ line takes.
 
 ## The screen
 
-`W` (`w`) dumps the text page and, in mixed mode, the graphics page behind the
-bottom four lines. It is only readable while the CPU is paused, so **Freeze &
+`W` (`w`) dumps the whole 1 KB text page in memory order, plus lo-res rows
+20-23 of the same page, which is what the bottom four lines show in mixed-mode
+graphics. It is only readable while the CPU is paused, so **Freeze &
 capture** pauses, dumps, and lets the machine run again. There is no way to read
 RAM while the CPU is running: the 64 KB is time-multiplexed between the CPU and
 the video generator, and stealing cycles from either is how the display goes
@@ -214,14 +175,15 @@ The screen shows text only. Hi-res is not rendered in the browser: `w` dumps
 the text page, not `$2000`/`$4000`, so a hi-res screen is only visible on the
 HDMI output.
 
-The dump is the interleaved Apple II layout, and the renderer mirrors
-`video_generator.v` exactly:
+The dump is memory order, and the renderer mirrors `video_generator.v` exactly:
 
-- 24 rows of 40 cells, 7x8 dots
+- 24 rows of 40 cells, 7x8 dots, picked out of the dump with the row
+  interleave (`protocol.js` `textPageIndex`, the addressing
+  `video_generator.v` reads the page with)
 - bit 7 of a cell is inverse video, and the //e draws flashing characters by
   toggling it, so one bit drives both
-- in mixed mode the bottom four lines are lo-res blocks, top four scanlines
-  from the high nibble and four from the low one
+- in mixed mode the bottom four lines are lo-res blocks from the `$GF` rows,
+  top four scanlines from the high nibble and four from the low one
 - the glyph address is `{0, code[7]|(code[6]&flash), code[6]&code[7], code[5:0], row}` and
   **a set bit is a lit dot** -- the code field is 6 bits wide, so `$41` reads
   glyph 1. `test/charset.test.js` pins that down against glyphs whose shape is
@@ -237,13 +199,10 @@ src/
                     physical arrangement lives
   protocol.js       byte encoding and the firmware's literal strings
   stream.js         the one incoming stream, classified
-  serial-link.js    Web Serial: the normal path, no bridge involved
-  ws-link.js        the bridge, for other machines and other browsers
-  endpoint.js       where the bridge is, when we are not using USB
+  serial-link.js    Web Serial: the whole transport, straight to the board
   charset.js        the character ROM, addressed as the RTL addresses it
-  useApple.ts       whichever link is open, command pacing, screen capture
+  useApple.ts       the link, command pacing, screen capture
   components/       Keyboard, Console, Screen, DebuggerPane, Gamepad, FlashBar
-bridge/bridge.mjs   serial <-> WebSocket, port probe, origin policy, flash job
 scripts/charset.mjs roms/apple2e_char.hex -> src/generated/charset.json
 scripts/pages.mjs   build the Pages bundle, check it, copy to docs/
 test/               node --test
@@ -251,17 +210,9 @@ test/               node --test
 
 ## Security
 
-On the USB path there is nothing to defend: the browser opens the port itself,
-and no other page can reach it — Web Serial is per-origin and gated behind a
-click.
-
-The bridge is a different matter, because it is a network service holding a
-serial port: anything that can reach it can type into the //e, read its RAM and
-trigger a flash. A WebSocket handshake is not subject to CORS, so the bridge
-checks the `Origin` itself — during the HTTP upgrade, so a refused page never
-gets a socket. Loopback origins and clients with no `Origin` at all (scripts)
-are allowed; anything else has to be named with `WEB_ORIGIN` or
-`--allow-origin`. The bridge says what it is allowing when it starts.
+There is nothing to defend: the browser opens the port itself, and no other
+page can reach it — Web Serial is per-origin and gated behind a click. A site
+that has been granted the port once still needs a user gesture to reopen it.
 
 ## Tests
 
@@ -269,9 +220,8 @@ are allowed; anything else has to be named with `WEB_ORIGIN` or
 make web-test
 ```
 
-None of this needs the board or a browser: the Web Serial object, the
-WebSocket and localStorage are all injected, so the whole of the app's logic is
-reachable from node.
+None of this needs the board or a browser: the Web Serial object and localStorage
+are injected, so the whole of the app's logic is reachable from node.
 
 `keymap.test.js` is the era check, and it is deliberately unforgiving: it pins
 the key count at 63, fails if a REPT key, a function key, a numeric keypad, a
@@ -284,12 +234,10 @@ G.
 
 `charset.test.js` pins the video ROM convention. `stream.test.js` drives the
 parser with the exact bytes the firmware emits, chunked every 1, 3, 7, 16, 40
-and 4096 bytes, because at 115200 nothing lands in one read. `endpoint.test.js`
-covers the bridge URL resolution, including rejecting half-typed rubbish rather
-than dialling somewhere wrong. `serial-link.test.js` drives the whole Web Serial
-path against an injected fake, because that is the only way to get at it
-outside a browser — and it is how the `open()`-on-the-port bug and the dropped
-8N1 were found.
+and 4096 bytes, because at 115200 nothing lands in one read. `serial-link.test.js`
+drives the whole Web Serial path against an injected fake, because that is the
+only way to get at it outside a browser — and it is how the `open()`-on-the-port
+bug and the dropped 8N1 were found.
 
 ## Things that are deliberately not here
 
@@ -301,6 +249,5 @@ outside a browser — and it is how the `open()`-on-the-port bug and the dropped
 - **A third game button.** The RTL decodes one at `$C063`, but no //e key closes
   it: the Open-Apple and Solid-Apple keys are hand-control buttons 0 and 1, and
   that is the whole of the machine's game input.
-- **The flash buttons on the USB path.** Programming runs `openFPGALoader`, and
-  the browser cannot start a subprocess. Use `make flash-sram` / `make flash`,
-  or the bridge.
+- **Flash buttons.** Programming runs `openFPGALoader`, and the browser cannot
+  start a subprocess. Use `make flash-sram` / `make flash` from a terminal.

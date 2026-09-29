@@ -35,6 +35,14 @@ module tb_top;
     wire [5:0] led;
     wire       uart_tx, i2s_bclk, i2s_lrck, i2s_din, pa_en;
 
+    // The board's SDRAM (aux RAM); declared before the instance that drives
+    // them (this iverilog rejects declaration-after-use).
+    wire        sd_clk, sd_cke, sd_cs_n, sd_cas_n, sd_ras_n, sd_wen_n;
+    wire [31:0] sd_dq;
+    wire [10:0] sd_addr;
+    wire [1:0]  sd_ba;
+    wire [3:0]  sd_dqm;
+
     top dut (.clk(clk), .btn_s1(1'b0), .btn_s2(1'b0), .led(led),
              .uart_rx(1'b1), .uart_tx(uart_tx),
              .tmds_clk_p(tmds_clk_p), .tmds_clk_n(tmds_clk_n),
@@ -45,12 +53,6 @@ module tb_top;
              .O_sdram_cas_n(sd_cas_n), .O_sdram_ras_n(sd_ras_n), .O_sdram_wen_n(sd_wen_n),
              .IO_sdram_dq(sd_dq), .O_sdram_addr(sd_addr), .O_sdram_ba(sd_ba), .O_sdram_dqm(sd_dqm));
 
-    // The board's SDRAM (aux RAM)
-    wire        sd_clk, sd_cke, sd_cs_n, sd_cas_n, sd_ras_n, sd_wen_n;
-    wire [31:0] sd_dq;
-    wire [10:0] sd_addr;
-    wire [1:0]  sd_ba;
-    wire [3:0]  sd_dqm;
     sdram_model u_sdram (.clk(sd_clk), .cke(sd_cke), .cs_n(sd_cs_n), .ras_n(sd_ras_n),
                          .cas_n(sd_cas_n), .we_n(sd_wen_n), .a(sd_addr), .ba(sd_ba),
                          .dqm(sd_dqm), .dq(sd_dq));

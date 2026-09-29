@@ -260,6 +260,20 @@ export const REPEAT_INTERVAL_MS = 100
  *  the keyboard; $C063 exists in the RTL and stays unused by this UI. */
 export const PADDLE_BUTTONS = [
   // No emoji in the labels either: see components/AppleGlyph.tsx.
-  { key: 'apple-o', label: 'Open-Apple', bit: 0b001, which: 'paddle 0' },
-  { key: 'apple-c', label: 'Solid-Apple', bit: 0b010, which: 'paddle 1' },
+  { key: 'apple-o', label: 'Open-Apple', bit: APPLE_BUTTON['apple-o'], which: 'paddle 0' },
+  { key: 'apple-c', label: 'Solid-Apple', bit: APPLE_BUTTON['apple-c'], which: 'paddle 1' },
 ]
+
+/** The paddle-button bits of every PADDLE_BUTTONS key held down. */
+export function paddleButtonBits(held) {
+  return PADDLE_BUTTONS.reduce((bits, b) => (held[b.key === 'apple-o' ? 'appleO' : 'appleC'] ? bits | b.bit : bits), 0)
+}
+
+/**
+ * Ctrl+B belongs to the debugger, not the //e: the firmware drops 0x02 before
+ * the keyboard sees it, and App toggles the debugger pane with it. One
+ * predicate, because App's listener and Keyboard's listener must agree.
+ */
+export function isDebuggerToggle(e) {
+  return e.ctrlKey && !e.shiftKey && !e.altKey && e.code === 'KeyB'
+}

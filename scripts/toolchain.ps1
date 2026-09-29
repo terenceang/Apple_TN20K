@@ -2,7 +2,7 @@
 #  scripts/toolchain.ps1 -- dot-source this to configure the OSS CAD Suite
 #  environment and set $OssCadBin / $script:NextPnr.
 #
-#  Tool discovery order (same as the old toolchain.sh, but Windows):
+#  Tool discovery order:
 #    1. $env:OSS_CAD_SUITE, if set
 #    2. "openfpga.toolchain.path" from VS Code user settings
 #    3. C:\oss-cad-suite  (the default install location)
@@ -14,6 +14,13 @@
 # ============================================================================
 
 $OssCadBin = $null
+
+# The project name (and so the bitstream name) is the SSOT in fpga.yaml.
+function Get-FpgaName {
+    $yaml = Get-Content (Join-Path (Split-Path -Parent $PSScriptRoot) 'fpga.yaml') -Raw
+    $name = ($yaml -split "`n" | Where-Object { $_ -match '^name:\s*(.+)' } | Select-Object -First 1) -replace '^name:\s*', ''
+    return $name.Trim()
+}
 
 function _FindOssCadRoot {
     param([string]$Root)

@@ -14,7 +14,8 @@
 //  bytes across a long stream, and the disparity never leaves +/-8, the
 //  encode is correct.
 //
-//  sim/run.sh also checks the fixed symbol tables byte-for-byte.
+//  The fixed control-symbol tables are pinned byte-for-byte here and
+//  re-checked by tb_packets and tb_top.
 // ============================================================================
 
 `timescale 1ns / 1ps

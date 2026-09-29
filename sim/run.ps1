@@ -22,22 +22,25 @@ function Run-Tb {
         [string]$Gen = '2005'
     )
     Write-Host "=== $Name ==="
-    $outExe = Join-Path $root "build\$Name.exe"
+    # On Windows iverilog -o writes a vvp script whatever the extension is, so
+    # name the output .vvp and run it through vvp explicitly.
+    $outVvp = Join-Path $root "build\$Name.vvp"
     $tbFile = Join-Path $root "sim\$Name.v"
-    
-    $iverilogArgs = @("-g$Gen", "-o", $outExe, $tbFile) + $Files
+
+    $iverilogArgs = @("-g$Gen", '-o', $outVvp, $tbFile) + $Files
     Invoke-Tool 'iverilog' $iverilogArgs
 
     $logFile = Join-Path $root "build\$Name.log"
-    
+    $vvp = if ($OssCadBin) { Join-Path $OssCadBin 'vvp.exe' } else { 'vvp' }
+
     $prevEAP = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
     try {
-        & $outExe > $logFile 2>&1
+        & $vvp $outVvp > $logFile 2>&1
     } finally {
         $ErrorActionPreference = $prevEAP
     }
-    
+
     Get-Content $logFile | Write-Host
     if ($LASTEXITCODE -ne 0) {
         throw "FAILED: $Name exited with code $LASTEXITCODE"
@@ -53,6 +56,13 @@ function Run-Tb {
 $hdmi = @('src/hdmi/hdmi_tx.v', 'src/hdmi/hdmi_island_scheduler.v', 'src/hdmi/hdmi_data_island.v',
           'src/hdmi/hdmi_packet_ecc.v', 'src/hdmi/hdmi_packets.v', 'src/hdmi/hdmi_tmds_encoder.v')
 $island = @('src/hdmi/hdmi_data_island.v', 'src/hdmi/hdmi_packet_ecc.v', 'src/hdmi/hdmi_tmds_encoder.v')
+
+# Guard against the hdmi list drifting from fpga.yaml (tb_top below reads the
+# yaml through sources.ps1; the unit testbenches above use this hand-made copy).
+$fpgaHdmi = @(& (Join-Path $root 'scripts\sources.ps1') | Where-Object { $_ -like 'src/hdmi/*' })
+if ((Compare-Object $hdmi $fpgaHdmi).Count -ne 0) {
+    throw "the `$hdmi list no longer matches fpga.yaml: $($hdmi -join ', ') vs $($fpgaHdmi -join ', ')"
+}
 
 Run-Tb 'tb_tmds_encoder' @('src/hdmi/hdmi_tmds_encoder.v')
 Run-Tb 'tb_packet_ecc'   @('src/hdmi/hdmi_packet_ecc.v')

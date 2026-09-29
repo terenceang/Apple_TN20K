@@ -2,10 +2,11 @@
 #  scripts/sources.ps1 -- print the RTL source list from fpga.yaml.
 #
 #  Usage:
-#    scripts/sources.ps1
-#    scripts/sources.ps1 --except src/foo/bar.v [--except ...]
+#    scripts\sources.ps1
+#    scripts\sources.ps1 --except src/foo/bar.v [--except ...]
 #
-#  Mirrors sources.sh: outputs one path per line, relative to the repo root.
+#  Outputs one path per line, relative to the repo root. sim\run.ps1 and
+#  scripts\build.ps1 both consume this, so fpga.yaml is the only file list.
 # ============================================================================
 [CmdletBinding()]
 param(

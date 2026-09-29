@@ -54,6 +54,11 @@ module sound_generator (
     // both 4 and 8: 4 clocks high, 5 low.  I2S tolerates the asymmetry, and
     // only the period matters.  A single toggle compare would give an even
     // period and land on 42187.5 Hz instead, which is what this used to do.
+    localparam [3:0] BCLK_DIV_LAST = 4'd8; // bclk_div counts 0..8: a 9-clock period
+    localparam [3:0] BCLK_DIV_MID  = 4'd4; // first toggle: 4 clocks high, 5 low
+    localparam [5:0] BCLK_LAST     = 6'd63; // last BCLK of the 64-BCLK frame
+    localparam [5:0] BCLK_LEFT_END = 6'd31; // last BCLK of the left channel
+
     reg [3:0] bclk_div = 4'd0;
     reg [5:0] bit_cnt  = 6'd0; // 0..63
     reg [31:0] shift_reg = 32'd0;
@@ -80,19 +85,19 @@ module sound_generator (
             // The shift below is gated on the *old* i2s_bclk being 1, which
             // is true only on the 4->8 transition, i.e. the falling edge, so
             // data still changes on the falling edge as I2S requires.
-            if (bclk_div == 4'd4 || bclk_div == 4'd8) begin
+            if (bclk_div == BCLK_DIV_MID || bclk_div == BCLK_DIV_LAST) begin
                 i2s_bclk <= ~i2s_bclk;
-                if (bclk_div == 4'd8)
+                if (bclk_div == BCLK_DIV_LAST)
                     bclk_div <= 4'd0;
                 else
-                    bclk_div <= 4'd5;
+                    bclk_div <= BCLK_DIV_MID + 4'd1;
 
                 // Shift data out on falling edge of BCLK
                 if (i2s_bclk) begin
                     i2s_din   <= shift_reg[31];
                     shift_reg <= {shift_reg[30:0], 1'b0};
 
-                    if (bit_cnt == 6'd63) begin
+                    if (bit_cnt == BCLK_LAST) begin
                         bit_cnt  <= 6'd0;
                         i2s_lrck <= 1'b0; // Left channel start
 
@@ -112,7 +117,7 @@ module sound_generator (
                         shift_reg <= {audio_sample, 16'd0};
                     end else begin
                         bit_cnt <= bit_cnt + 1'b1;
-                        if (bit_cnt == 6'd31) begin
+                        if (bit_cnt == BCLK_LEFT_END) begin
                             i2s_lrck  <= 1'b1; // Right channel start
                             shift_reg <= {audio_sample, 16'd0};
                         end

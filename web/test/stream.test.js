@@ -6,7 +6,17 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 
 import { AppleStream, screenToText } from '../src/stream.js'
-import { BANNER, HELP, RESUME, SCR_COLS, SCR_TEXT_BYTES } from '../src/protocol.js'
+import {
+  BANNER,
+  HELP,
+  RESUME,
+  SCR_COLS,
+  SCR_TEXT_BYTES,
+  SCR_GFX_BYTES,
+  SCR_GFX_ROWS,
+  SCR_GFX_ROW_BYTES,
+  textPageIndex,
+} from '../src/protocol.js'
 
 const b = (s) => Uint8Array.from([...s].map((c) => c.charCodeAt(0)))
 
@@ -141,23 +151,25 @@ test('a frame split across arbitrary chunk boundaries still parses', () => {
 
 /** Build the exact byte sequence the W command emits. */
 function screenFrame(flags, fill) {
-  // The wire carries display order, so build the page that way
+  // The wire carries the page in memory order, holes included; a cell sits at
+  // textPageIndex(row, col), which is the interleaving video_generator reads.
   const page = new Uint8Array(SCR_TEXT_BYTES)
-  for (let i = 0; i < 24 * SCR_COLS; i++) page[i] = fill + (i % 8)
-  const gfx = new Uint8Array(128).fill(0x2a)
-  let s = `\r\n$SS ${flags.toString(16).toUpperCase().padStart(2, '0')}\r\n `
+  const put = (r, c, v) => (page[textPageIndex(r, c)] = v)
   for (let r = 0; r < 24; r++) {
-    let row = ''
-    for (let c = 0; c < 40; c++) {
-      const v = page[r * SCR_COLS + c]
-      row += v.toString(16).toUpperCase().padStart(2, '0')
-    }
-    s += row + '\r\n'
+    for (let c = 0; c < SCR_COLS; c++) put(r, c, fill + ((r * 8 + c) % 8))
   }
+  // Mark a hole, so the test proves holes are carried rather than skipped.
+  page[40] = 0x5a
+  const gfx = new Uint8Array(SCR_GFX_BYTES).fill(0x2a)
+  let s = `\r\n$SS ${flags.toString(16).toUpperCase().padStart(2, '0')}\r\n `
+  // The firmware breaks the hex run with CRLF every 40 bytes; the parser
+  // should not care where the lines fall, so follow that cadence.
+  const hexOf = (bytes, at, n) =>
+    [...bytes.slice(at, at + n)].map((v) => v.toString(16).toUpperCase().padStart(2, '0')).join('')
+  for (let at = 0; at < SCR_TEXT_BYTES; at += 40) s += hexOf(page, at, 40) + '\r\n'
   s += '\r\n$GF'
-  for (let r = 0; r < 4; r++) {
-    for (let c = 0; c < 32; c++) s += gfx[r * 32 + c].toString(16).toUpperCase().padStart(2, '0')
-    s += '\r\n'
+  for (let r = 0; r < SCR_GFX_ROWS; r++) {
+    s += hexOf(gfx, r * SCR_GFX_ROW_BYTES, SCR_GFX_ROW_BYTES) + '\r\n'
   }
   s += '\r\n$SEND\r\n'
   return { s, page, gfx }
@@ -173,7 +185,7 @@ test('a screen dump parses, however it is chunked', () => {
     assert.ok(sc, `no screen event at chunk size ${size}`)
     assert.equal(sc.page.length, SCR_TEXT_BYTES)
     assert.deepEqual([...sc.page], [...page], `page mismatch at chunk size ${size}`)
-    assert.equal(sc.gfx.length, 128)
+    assert.equal(sc.gfx.length, SCR_GFX_BYTES)
     assert.equal(sc.text, true, 'TEXT bit set')
     assert.equal(sc.mixed, true, 'MIXED bit set')
     assert.equal(sc.page2, true, 'PAGE2 bit set')
@@ -190,8 +202,8 @@ test('the dump does not leak into the console as text', () => {
 
 test('cells undo the row interleaving and split off inverse video', () => {
   const page = new Uint8Array(SCR_TEXT_BYTES)
-  // row 3, col 7 gets an inverse '$'
-  page[3 * SCR_COLS + 7] = 0x80 | 0x24
+  // row 3, col 7 gets an inverse '$', at its interleaved address
+  page[textPageIndex(3, 7)] = 0x80 | 0x24
   const rows = AppleStream.cells(page)
   assert.equal(rows.length, 24)
   assert.equal(rows[0].length, 40)
@@ -201,7 +213,7 @@ test('cells undo the row interleaving and split off inverse video', () => {
 
 test('screenToText lays the cells out as lines', () => {
   const page = new Uint8Array(SCR_TEXT_BYTES)
-  const put = (r, c, ch) => (page[r * SCR_COLS + c] = ch.charCodeAt(0))
+  const put = (r, c, ch) => (page[textPageIndex(r, c)] = ch.charCodeAt(0))
   put(0, 0, 'A')
   put(0, 1, 'P')
   put(0, 2, 'P')

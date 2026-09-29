@@ -15,11 +15,20 @@
 //  Plain JS so `node --test` can drive it with real byte sequences.
 // ============================================================================
 
-import { SCR_TEXT_ROWS, SCR_COLS, SCR_TEXT_BYTES, SCR_GFX_BYTES, SCR_FLAG, textPageIndex } from './protocol.js'
+import {
+  SCR_TEXT_ROWS,
+  SCR_COLS,
+  SCR_TEXT_BYTES,
+  SCR_GFX_BYTES,
+  SCR_FLAG,
+  textPageIndex,
+  BANNER_TEXT,
+  RESUME_TEXT,
+  PROMPT_LINE,
+  HANDSHAKE,
+} from './protocol.js'
 
-const DEBUGGER_BANNER = '[ Apple //e Debugger ]'
-const RESUMING = '[Resuming...]'
-const PROMPT = '>'
+const HELP_PREFIX = HANDSHAKE.slice(0, HANDSHAKE.indexOf(':') + 2) // 'Cmds: '
 
 const REGS_RE =
   /^PC:\$([0-9A-F]{4}) A:\$([0-9A-F]{2}) X:\$([0-9A-F]{2}) Y:\$([0-9A-F]{2}) SP:\$([0-9A-F]{2}) P:\[([N\-V\-BDIZC]{8})\] OP:\$([0-9A-F]{2})/
@@ -30,12 +39,12 @@ const MEM_RE = /^\$([0-9A-F]{4}): (.*)\|([\x20-\x7e.]*)\|$/
 const STATUS_RE = /^VID:([TG]) PLL:([01])$/
 
 /**
- * $SS <flags> then 24 rows of hex; $GF then 4 rows; $SEND ends it.
+ * $SS <flags> then the 1 KB text page; $GF then 4 rows of 40; $SEND ends it.
  *
- * The text page is 1024 bytes but only the 960 displayed cells go on the wire,
- * so the 64 interleaving holes arrive as nothing and are left blank.
+ * The text page goes down the wire in memory order, interleaving holes
+ * included, so all 1024 bytes arrive as hex.
  */
-const HEX_RUN = SCR_TEXT_ROWS * SCR_COLS * 2
+const HEX_RUN = SCR_TEXT_BYTES * 2
 const GFX_RUN = SCR_GFX_BYTES * 2
 
 export class AppleStream {
@@ -108,7 +117,7 @@ export class AppleStream {
         if (b === 0x20) return
       }
       this.line += String.fromCharCode(b)
-      if (this.mode === 'debugger' && this.line === '>') {
+      if (this.mode === 'debugger' && this.line === PROMPT_LINE) {
         this.line = ''
         this.afterPrompt = true
         this.emit({ t: 'prompt' })
@@ -159,13 +168,13 @@ export class AppleStream {
     }
 
     // --- mode changes ----------------------------------------------------
-    if (s.startsWith(DEBUGGER_BANNER)) {
+    if (s.startsWith(BANNER_TEXT)) {
       this.mode = 'debugger'
       this.emit({ t: 'mode', mode: this.mode })
       this.emit({ t: 'banner' })
       return
     }
-    if (s.startsWith(RESUMING)) {
+    if (s.startsWith(RESUME_TEXT)) {
       this.mode = 'console'
       this.emit({ t: 'mode', mode: this.mode })
       this.emit({ t: 'resumed' })
@@ -173,11 +182,11 @@ export class AppleStream {
     }
 
     // --- debugger frames -------------------------------------------------
-    if (s.startsWith('Cmds: ')) {
+    if (s.startsWith(HELP_PREFIX)) {
       this.emit({ t: 'help' })
       return
     }
-    if (s === PROMPT) {
+    if (s === PROMPT_LINE) {
       this.emit({ t: 'prompt' })
       return
     }
@@ -216,10 +225,11 @@ export class AppleStream {
   frameText() {
     if (!this.frame || this.frame.rows) return
     const hex = this.frame.text.slice(0, HEX_RUN)
-    // Row-major, and padded out to a full page so a caller can index it
-    // uniformly; the 64 interleaving holes are never on the wire.
+    // Memory order, exactly as the firmware read it out of $0400-$07FF: the
+    // 64 interleaving holes are on the wire too. Callers index the page with
+    // textPageIndex.
     const page = new Uint8Array(SCR_TEXT_BYTES)
-    const shown = Math.floor(hex.length / 2)
+    const shown = Math.min(Math.floor(hex.length / 2), SCR_TEXT_BYTES)
     for (let i = 0; i < shown; i++) page[i] = parseInt(hex.substr(i * 2, 2), 16) || 0
     this.frame.page = page
     this.frame.rows = 1
@@ -254,19 +264,18 @@ export class AppleStream {
   /**
    * Unpack a dumped page into 24 rows of 40 cells.
    *
-   * The dump is in the order the firmware printed it, which is display order:
-   * 24 rows of 40 cells, not the interleaved memory order. Each cell is
-   * { code, inverse }: bit 7 of the stored byte is inverse video, not part of
-   * the character. (The interleaving that puts a cell at $0400+... is
-   * protocol.js's textPageIndex, and is only needed by something reading RAM
-   * directly.)
+   * The dump is in memory order ($0400 upward, interleaving holes included),
+   * so each cell comes out through textPageIndex -- the same interleaving
+   * video_generator.v reads the page with.
+   * Each cell is { code, inverse }: bit 7 of the stored byte is inverse
+   * video, not part of the character.
    */
   static cells(page) {
     const rows = []
     for (let r = 0; r < SCR_TEXT_ROWS; r++) {
       const row = []
       for (let c = 0; c < SCR_COLS; c++) {
-        const b = page[r * SCR_COLS + c]
+        const b = page[textPageIndex(r, c)]
         row.push({ code: b & 0x7f, inverse: (b & 0x80) !== 0 })
       }
       rows.push(row)

@@ -26,6 +26,8 @@
 //        t - Display hardware status (Softswitches, Video, Audio, Clocks)
 //        h - Help menu
 
+`include "src/uart_defs.vh"
+
 module serial_debugger (
     input  wire        clk,            // 27.0 MHz
     input  wire        reset,          // Active-high reset
@@ -74,9 +76,9 @@ module serial_debugger (
 );
 
     // =========================================================================
-    // 1. UART TX Engine with 256-Byte Circular FIFO
+    // 1. UART TX Engine with 64-Byte Circular FIFO
     // =========================================================================
-    localparam [8:0] CLKS_PER_BIT = 9'd234; // 27 MHz / 115200 baud
+    localparam [8:0] CLKS_PER_BIT = `UART_CLKS_PER_BIT; // src/uart_defs.vh
 
     reg [7:0] tx_fifo [0:63];
     reg [5:0] tx_wr_ptr = 6'd0;
@@ -277,6 +279,11 @@ module serial_debugger (
                     (rx_byte == 8'h0D) || (rx_byte == 8'h0A) ||
                     (rx_byte == 8'h08) || (rx_byte == 8'h07);
 
+    // The six memory-dump preset keys ("0" "1" "4" "8" "f"/"F" "v"/"V")
+    wire mem_preset = (rx_byte == "0") || (rx_byte == "1") || (rx_byte == "4") ||
+                      (rx_byte == "8") || (rx_byte == "f") || (rx_byte == "F") ||
+                      (rx_byte == "v") || (rx_byte == "V");
+
     // =========================================================================
     // 5. Hardware Debugger State Machine & Micro-Sequencer
     // =========================================================================
@@ -288,16 +295,26 @@ module serial_debugger (
     localparam M_STATUS  = 4'd5;
     localparam M_SCREEN  = 4'd6;
 
-    // Screen dump state. The W command streams the text page the video
-    // generator is showing, plus the graphics page the bottom four lines use
-    // in mixed mode, so a host can redraw the screen exactly. Only reachable
-    // while the CPU is paused, which is what makes the read race-free: nothing
-    // can rewrite $0400 while dbg_mode is set.
+    // Screen dump state. The W command streams the 1 KB text page the video
+    // generator is showing, in memory order ($0400/$0800 upward, interleaving
+    // holes included -- the host applies the row interleave), plus lo-res rows
+    // 20-23 of the same page, which is what the bottom four lines show in
+    // mixed mode. Only reachable while the CPU is paused, which is what makes
+    // the read race-free: nothing can rewrite $0400 while dbg_mode is set.
+    // (With 80STORE + PAGE2 the displayed page is the aux one, which the
+    // debugger cannot read -- it sees main RAM only -- so the dump then shows
+    // the main-RAM copy.)
     reg [15:0] scr_addr  = 16'h0400;
     reg [10:0] scr_left  = 11'd0;   // bytes still to print
-    reg [5:0]  scr_col   = 6'd0;    // 0..39 text columns, 0..31 graphics
+    reg [5:0]  scr_col   = 6'd0;    // byte within the current row, 0..39
+    reg [1:0]  gfx_row   = 2'd0;    // graphics row being dumped, 0..3
     reg [2:0]  scr_wait  = 3'd0;    // settle cycles between RAM reads
     reg [7:0]  scr_flags = 8'h00;
+
+    // The text page lo-res rows 20-23 sit at page + $250/$2D0/$350/$3D0, i.e.
+    // page + $250 + 128*n (the same row interleave video_generator.v reads).
+    wire [15:0] scr_page   = page2 ? 16'h0800 : 16'h0400;
+    wire [15:0] scrgfx_row = scr_page + 16'h0250 + {7'd0, gfx_row, 7'd0};
 
     reg [3:0] main_state = M_IDLE;
     reg [3:0] return_job = M_IDLE;
@@ -322,6 +339,45 @@ module serial_debugger (
     localparam S_START = 2'd1;
     localparam S_WAIT0 = 2'd2;
     localparam S_WAIT1 = 2'd3;
+
+    // Snapshot the 65C02 registers for the register dump. Three entry points
+    // need exactly this: the Ctrl+B handshake, the step finish, and "r".
+    // (Declared after the registers it writes; this iverilog rejects
+    // declaration-after-use inside tasks too.)
+    task latch_regs;
+        begin
+            latched_pc <= cpu_pc;
+            latched_a  <= cpu_a;
+            latched_x  <= cpu_x;
+            latched_y  <= cpu_y;
+            latched_s  <= cpu_s;
+            latched_p  <= cpu_p;
+            latched_ir <= cpu_ir;
+        end
+    endtask
+
+    // One byte of a screen dump: present the address, wait for the RAM to
+    // settle (same read-settle pattern as the memory dump: dbg_mem_din is
+    // combinational off dbg_mem_addr), then hand the byte to the hex printer
+    // and resume the dump at `next`.
+    task scr_read_byte(input [4:0] next);
+        begin
+            dbg_mem_addr <= scr_addr;
+            if (scr_wait < 3'd4) begin
+                scr_wait <= scr_wait + 1'b1;
+            end else if (dbg_mem_ready) begin
+                scr_wait   <= 3'd0;
+                scr_addr   <= scr_addr + 16'd1;
+                scr_left   <= scr_left - 11'd1;
+                scr_col    <= scr_col + 1'b1;
+                hex_val    <= {dbg_mem_din, 8'h00};
+                hex_digits <= 3'd2;
+                return_job <= M_SCREEN;
+                main_state <= M_HEX;
+                seq_step   <= next;
+            end
+        end
+    endtask
 
     reg [1:0] step_fsm = S_IDLE;
 
@@ -412,13 +468,7 @@ module serial_debugger (
                     if (ce_1m && cpu_sync) begin
                         cpu_rdy    <= 1'b0;
                         step_fsm   <= S_IDLE;
-                        latched_pc <= cpu_pc;
-                        latched_a  <= cpu_a;
-                        latched_x  <= cpu_x;
-                        latched_y  <= cpu_y;
-                        latched_s  <= cpu_s;
-                        latched_p  <= cpu_p;
-                        latched_ir <= cpu_ir;
+                        latch_regs;
                         // Trigger Register print
                         main_state <= M_REGS;
                         seq_step   <= 5'd0;
@@ -431,13 +481,7 @@ module serial_debugger (
                 if (!dbg_mode) begin
                     dbg_mode   <= 1'b1;
                     cpu_rdy    <= 1'b0;
-                    latched_pc <= cpu_pc;
-                    latched_a  <= cpu_a;
-                    latched_x  <= cpu_x;
-                    latched_y  <= cpu_y;
-                    latched_s  <= cpu_s;
-                    latched_p  <= cpu_p;
-                    latched_ir <= cpu_ir;
+                    latch_regs;
                     dump_addr  <= cpu_pc;
                     // Print Banner
                     str_pos    <= STR_BANNER_START;
@@ -465,13 +509,7 @@ module serial_debugger (
             end else if (dbg_mode && (main_state == M_IDLE) && rx_valid) begin
                 case (rx_byte)
                     "r", "R": begin
-                        latched_pc <= cpu_pc;
-                        latched_a  <= cpu_a;
-                        latched_x  <= cpu_x;
-                        latched_y  <= cpu_y;
-                        latched_s  <= cpu_s;
-                        latched_p  <= cpu_p;
-                        latched_ir <= cpu_ir;
+                        latch_regs;
                         main_state <= M_REGS;
                         seq_step   <= 5'd0;
                     end
@@ -510,12 +548,12 @@ module serial_debugger (
                         cpu_rdy     <= 1'b0;
                     end
 
-                    "0": begin dump_addr <= 16'h0000; main_state <= M_MEM; seq_step <= 5'd0; mem_col <= 4'd0; mem_wait <= 3'd0; end
-                    "1": begin dump_addr <= 16'h0100; main_state <= M_MEM; seq_step <= 5'd0; mem_col <= 4'd0; mem_wait <= 3'd0; end
-                    "4": begin dump_addr <= 16'h0400; main_state <= M_MEM; seq_step <= 5'd0; mem_col <= 4'd0; mem_wait <= 3'd0; end
-                    "8": begin dump_addr <= 16'h0800; main_state <= M_MEM; seq_step <= 5'd0; mem_col <= 4'd0; mem_wait <= 3'd0; end
-                    "f", "F": begin dump_addr <= 16'hFA60; main_state <= M_MEM; seq_step <= 5'd0; mem_col <= 4'd0; mem_wait <= 3'd0; end
-                    "v", "V": begin dump_addr <= 16'hFFF0; main_state <= M_MEM; seq_step <= 5'd0; mem_col <= 4'd0; mem_wait <= 3'd0; end
+                    "0":     dump_addr <= 16'h0000;
+                    "1":     dump_addr <= 16'h0100;
+                    "4":     dump_addr <= 16'h0400;
+                    "8":     dump_addr <= 16'h0800;
+                    "f", "F": dump_addr <= 16'hFA60;
+                    "v", "V": dump_addr <= 16'hFFF0;
 
                     "t", "T": begin
                         main_state <= M_STATUS;
@@ -543,6 +581,15 @@ module serial_debugger (
 
                     default: ;
                 endcase
+
+                // Any of the six preset addresses above starts a dump; "m"
+                // reuses the last address. Only the address differs.
+                if (mem_preset) begin
+                    main_state <= M_MEM;
+                    seq_step   <= 5'd0;
+                    mem_col    <= 4'd0;
+                    mem_wait   <= 3'd0;
+                end
             end
 
             // Main State Machine
@@ -842,14 +889,16 @@ module serial_debugger (
                 // Wire format, all hex text so a plain terminal can read it too:
                 //
                 //   $SS <flags>          one flag byte, then
-                //                         <40 bytes>  x24   text page, one row each
-                //   $GF <32 bytes>  x4   graphics page rows 20-23, mixed mode only
+                //                         1024 bytes  the whole text page, in
+                //                                     memory order ($0400/$0800
+                //                                     upward, interleaving holes
+                //                                     included)
+                //   $GF <40 bytes>  x4   lo-res rows 20-23 of the same page
                 //   $SEND
                 //
-                // Text rows are 40 bytes of $0400/$0800 in the same interleaved
-                // order video_generator.v reads them, so the host can index
-                // them directly. Bit 7 of each byte is inverse video, not part
-                // of the character.
+                // The host applies the row interleave (web/src/protocol.js
+                // textPageIndex). Bit 7 of each text byte is inverse video,
+                // not part of the character.
                 // -------------------------------------------------------------
                 M_SCREEN: begin
                     case (seq_step)
@@ -872,7 +921,7 @@ module serial_debugger (
                         end
                         5'd2: if (!tx_fifo_full) begin // start of text page
                             fifo_push(" ");
-                            scr_addr <= page2 ? 16'h0800 : 16'h0400;
+                            scr_addr <= scr_page;
                             scr_left <= 11'd1024;
                             scr_col  <= 6'd0;
                             scr_wait <= 3'd0;
@@ -882,24 +931,7 @@ module serial_debugger (
                             if (scr_left == 11'd0) begin
                                 seq_step <= 5'd6;
                             end else begin
-                                // Same read-settle pattern as the memory dump:
-                                // the RAM answer lands a few cycles after the
-                                // address is presented, and dbg_mem_din is
-                                // combinational off the current dbg_mem_addr.
-                                dbg_mem_addr <= scr_addr;
-                                if (scr_wait < 3'd4) begin
-                                    scr_wait <= scr_wait + 1'b1;
-                                end else if (dbg_mem_ready) begin
-                                    scr_wait   <= 3'd0;
-                                    scr_addr   <= scr_addr + 16'd1;
-                                    scr_left   <= scr_left - 11'd1;
-                                    scr_col    <= scr_col + 1'b1;
-                                    hex_val    <= {dbg_mem_din, 8'h00};
-                                    hex_digits <= 3'd2;
-                                    return_job <= M_SCREEN;
-                                    main_state <= M_HEX;
-                                    seq_step   <= 5'd4;
-                                end
+                                scr_read_byte(5'd4);
                             end
                         end
                         5'd4: if (scr_col == 6'd40) begin // end of a text row
@@ -912,14 +944,17 @@ module serial_debugger (
                             seq_step <= 5'd3;
                         end
                         5'd6: if (!tx_fifo_full) begin // "\r\n$GF"
-                            // In mixed mode the bottom four lines are graphics
-                            // taken from the page the text is not on.
+                            // Lo-res rows 20-23 of the same page the text came
+                            // from: in lo-res the graphics share the text page,
+                            // and these are the four lines mixed mode hides. A
+                            // hi-res screen ignores them.
                             str_pos    <= STR_GFX_START;
                             str_cnt    <= STR_GFX_LEN;
                             return_job <= M_SCREEN;
                             main_state <= M_STR;
-                            scr_addr   <= (page2 ? 16'h0400 : 16'h0800) + 16'h0500;
-                            scr_left   <= 11'd128;
+                            scr_addr   <= scrgfx_row;
+                            scr_left   <= 11'd160; // 4 rows of 40 bytes
+                            gfx_row    <= 2'd0;
                             scr_col    <= 6'd0;
                             scr_wait   <= 3'd0;
                             seq_step   <= 5'd7;
@@ -928,28 +963,21 @@ module serial_debugger (
                             if (scr_left == 11'd0) begin
                                 seq_step <= 5'd9;
                             end else begin
-                                dbg_mem_addr <= scr_addr;
-                                if (scr_wait < 3'd4) begin
-                                    scr_wait <= scr_wait + 1'b1;
-                                end else if (dbg_mem_ready) begin
-                                    scr_wait   <= 3'd0;
-                                    scr_addr   <= scr_addr + 16'd1;
-                                    scr_left   <= scr_left - 11'd1;
-                                    scr_col    <= scr_col + 1'b1;
-                                    hex_val    <= {dbg_mem_din, 8'h00};
-                                    hex_digits <= 3'd2;
-                                    return_job <= M_SCREEN;
-                                    main_state <= M_HEX;
-                                    seq_step   <= 5'd8;
-                                end
+                                scr_read_byte(5'd8);
                             end
                         end
-                        5'd8: if (scr_col == 6'd32) begin
-                            scr_col    <= 6'd0;
-                            str_pos    <= STR_CRLF_START;
-                            str_cnt    <= STR_CRLF_LEN;
-                            return_job <= M_SCREEN;
-                            main_state <= M_STR;
+                        5'd8: if (scr_col == 6'd40) begin // end of a graphics row
+                            scr_col <= 6'd0;
+                            if (gfx_row == 2'd3) begin
+                                seq_step <= 5'd9;
+                            end else begin
+                                gfx_row  <= gfx_row + 2'd1;
+                                scr_addr <= scrgfx_row + 16'd128; // the next row's base
+                                str_pos    <= STR_CRLF_START;
+                                str_cnt    <= STR_CRLF_LEN;
+                                return_job <= M_SCREEN;
+                                main_state <= M_STR;
+                            end
                         end else begin
                             seq_step <= 5'd7;
                         end

@@ -46,10 +46,10 @@ clean:
 #  Web front end
 #
 #  `web/` is a Node project, separate from the FPGA build: `make web-build`
-#  produces the bundle the bridge serves, `make bridge` runs the bridge itself
-#  (scripts/bridge.sh, which is the only implementation), and `make web-test`
-#  runs the JS tests. The React app, the keymap and the screen renderer are in
-#  web/README.md.
+#  produces the static bundle the app is served from (it opens the board's
+#  serial port itself over Web Serial; there is no bridge process), and
+#  `make web-test` runs the JS tests. The React app, the keymap and the
+#  screen renderer are in web/README.md.
 # ============================================================================
 
 web-install:

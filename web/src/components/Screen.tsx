@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react'
 import { AppleStream, screenToText } from '../stream.js'
 import { dotRow, HAS_GLYPHS, GLYPH_W, GLYPH_H } from '../charset.js'
-import { LORES_PALETTE, SCR_COLS, SCR_GFX_ROWS } from '../protocol.js'
+import { LORES_PALETTE, SCR_COLS, SCR_TEXT_ROWS, SCR_GFX_ROWS, SCR_GFX_ROW_BYTES } from '../protocol.js'
 import {
   PREF_SCREEN_PALETTE,
   PREF_SCREEN_SCANLINES,
@@ -15,8 +15,6 @@ import type { Screen as ScreenFrame } from '../useApple'
 
 const SCALE = 2 // the Apple II raster is 560x384; double it
 const FLASH_MS = 620 // video_generator.v's flash_clk is about 1.6 Hz
-const COLS = 40
-const ROWS = 24
 const LORES_BLOCK_W = 14 // a lo-res block is one 14-pixel character cell wide
 
 const rgb = (c: number[]) => `rgb(${c[0]},${c[1]},${c[2]})`
@@ -24,6 +22,8 @@ const rgb = (c: number[]) => `rgb(${c[0]},${c[1]},${c[2]})`
 export type PhosphorTheme = 'green' | 'amber' | 'white'
 
 const PALETTES: Record<PhosphorTheme, { on: number[]; off: number[]; label: string; dot: string }> = {
+  // green.on/off are video_generator.v's text phosphor; the other themes are
+  // this pane's own cosmetic choices.
   green: {
     on: [0x20, 0xe8, 0x20],
     off: [0x02, 0x06, 0x02],
@@ -134,8 +134,8 @@ export function Screen({ screen, onCapture, busy, onClose }: Props) {
     const ctx = cv?.getContext('2d')
     if (!cv || !ctx || !screen || !cells) return
 
-    cv.width = COLS * GLYPH_W * SCALE
-    cv.height = ROWS * GLYPH_H * SCALE
+    cv.width = SCR_COLS * GLYPH_W * SCALE
+    cv.height = SCR_TEXT_ROWS * GLYPH_H * SCALE
     ctx.imageSmoothingEnabled = false
     ctx.fillStyle = 'rgb(0,0,0)'
     ctx.fillRect(0, 0, cv.width, cv.height)
@@ -143,14 +143,15 @@ export function Screen({ screen, onCapture, busy, onClose }: Props) {
     // The bottom four lines are lo-res graphics in mixed mode, which is where
     // the //e ROM normally leaves them. video_generator.v decides it the same
     // way: is_text_line = text_mode || (mixed_mode && text_row >= 20).
-    const isTextLine = (row: number) => screen.text || (screen.mixed && row >= ROWS - 4)
+    const bottom = SCR_TEXT_ROWS - SCR_GFX_ROWS
+    const isTextLine = (row: number) => screen.text || (screen.mixed && row >= bottom)
 
-    for (let row = 0; row < ROWS; row++) {
+    for (let row = 0; row < SCR_TEXT_ROWS; row++) {
       if (!isTextLine(row)) {
         drawLores(ctx, row, screen)
         continue
       }
-      for (let col = 0; col < COLS; col++) {
+      for (let col = 0; col < SCR_COLS; col++) {
         const cell = cells[row][col]
         // Inverse video swaps the lit and unlit colours, and the //e draws
         // flashing characters by toggling that bit, so it drives both.
@@ -287,13 +288,13 @@ export function Screen({ screen, onCapture, busy, onClose }: Props) {
 }
 
 /** Lo-res: 40 blocks across, four scanlines from the high nibble and four from
- *  the low one, which is what video_generator.v does with glyph_row[2]. */
+ *  the low one, which is what video_generator.v does with glyph_row[2]. One
+ *  dumped byte per block, the way the $GF frame carries it. */
 function drawLores(ctx: CanvasRenderingContext2D, row: number, screen: ScreenFrame) {
-  const gfxRow = row - (ROWS - 4)
+  const gfxRow = row - (SCR_TEXT_ROWS - SCR_GFX_ROWS)
   if (gfxRow < 0 || gfxRow >= SCR_GFX_ROWS) return
-  for (let block = 0; block < COLS; block++) {
-    // Lo-res only uses the even byte of each pair
-    const byte = screen.gfx[gfxRow * (SCR_COLS / 2) * 2 + block * 2] ?? 0
+  for (let block = 0; block < SCR_GFX_ROW_BYTES; block++) {
+    const byte = screen.gfx[gfxRow * SCR_GFX_ROW_BYTES + block] ?? 0
     const y = row * GLYPH_H * SCALE
     ctx.fillStyle = rgb(LORES_PALETTE[(byte >> 4) & 0x0f])
     ctx.fillRect(block * LORES_BLOCK_W * SCALE, y, LORES_BLOCK_W * SCALE, 4 * SCALE)

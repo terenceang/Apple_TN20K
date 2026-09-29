@@ -78,7 +78,7 @@ test('hex parsing tolerates whitespace and chunk boundaries', () => {
 
 test('the screen dump sizes are what the W command emits', () => {
   assert.equal(SCR_TEXT_BYTES, 1024) // the whole page, contiguous
-  assert.equal(SCR_GFX_BYTES, 128) // 4 rows x 32
+  assert.equal(SCR_GFX_BYTES, 160) // lo-res rows 20-23: 4 rows x 40 bytes
   assert.equal(SCR_TEXT_ROWS * SCR_COLS, 960) // but only 960 are on screen
 })
 

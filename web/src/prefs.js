@@ -4,6 +4,8 @@
 //  Plain JS with JSDoc so `node --test` can test this directly without browser.
 // ============================================================================
 
+import { BAUD } from './serial-link.js'
+
 export const PREF_CONSOLE = 'a2e.showConsole'
 export const PREF_DEBUGGER = 'a2e.showDebugger'
 export const PREF_SCREEN = 'a2e.showScreen'
@@ -89,17 +91,17 @@ export function setSavedString(store, key, value) {
  * @param {number} [baud]
  * @returns {string}
  */
-export function formatConnState(conn, baud = 115200) {
+export function formatConnState(conn, baud = BAUD) {
   if (!conn) return 'not connected'
   switch (conn.state) {
     case 'idle':
       return 'not connected'
     case 'opening':
       return 'opening the USB port...'
+    case 'open-unchecked':
+      return 'port open, checking that this is the //e...'
     case 'probing':
       return 'asking the //e who is there...'
-    case 'connecting':
-      return 'looking for the FPGA UART...'
     case 'open':
       return conn.detail ? `connected to ${conn.detail}` : `connected at ${baud}`
     case 'wrong-port':

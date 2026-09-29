@@ -79,6 +79,9 @@ module top (
     wire        dbg_mem_ready;
     wire        dbg_aux;
 
+    // Asserted by the debugger's "x" (CPU reset) command; consumed by the core
+    wire        cpu_reset_req;
+
     wire [15:0] debug_cpu_pc;
     wire [15:0] debug_cpu_addr;
     wire [7:0]  debug_cpu_dout;
@@ -162,7 +165,6 @@ module top (
     );
 
     // Apple //e Core (CPU, Memory, Softswitches)
-    wire        cpu_reset_req;
     wire        vram_req;
     wire [15:0] vram_addr;
     wire [7:0]  vram_data;
@@ -391,6 +393,8 @@ module top (
         .i2s_lrck(i2s_lrck),
         .i2s_din(i2s_din),
         .pa_en(pa_en),
+        // No on-board consumer: the 1-bit speaker toggle reaches the outside
+        // world only through audio_sample (I2S + HDMI); tb_sound watches it.
         .spkr_out(),
         .audio_sample(spkr_sample)
     );

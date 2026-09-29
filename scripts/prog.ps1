@@ -1,7 +1,6 @@
 # ============================================================================
 #  scripts/prog.ps1 -- load the bitstream into the Tang Nano 20K.
 #
-#  Mirrors scripts/prog.sh:
 #    scripts\prog.ps1           SRAM load (fast, lost on power cycle)
 #    scripts\prog.ps1 -Flash    write configuration flash (persistent)
 #
@@ -18,9 +17,7 @@ $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
 . (Join-Path $PSScriptRoot 'toolchain.ps1')
 
-$yaml = Get-Content (Join-Path $root 'fpga.yaml') -Raw
-$name = ($yaml -split "`n" | Where-Object { $_ -match '^name:\s*(.+)' } | Select-Object -First 1) -replace '^name:\s*', ''
-$name = $name.Trim()
+$name = Get-FpgaName
 
 $fs   = "build/bitstream/$name.fs"
 $freq = if ($env:FREQ) { $env:FREQ } else { '2.5M' }

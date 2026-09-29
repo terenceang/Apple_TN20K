@@ -33,6 +33,8 @@ import { existsSync } from 'node:fs'
 import { dirname, join, resolve, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+import { parseHexDump } from './lib/charrom.mjs'
+
 const HERE = dirname(fileURLToPath(import.meta.url))
 const WEB = resolve(HERE, '..')
 const REPO = resolve(WEB, '..')
@@ -51,9 +53,11 @@ const log = (...a) => console.log('[pages]', ...a)
 // ---------------------------------------------------------------------------
 
 log('building for Pages (no character ROM, relative asset paths)')
+// On Windows npx is npx.cmd, which spawnSync cannot exec without a shell.
 const build = spawnSync('npx', ['vite', 'build'], {
   cwd: WEB,
   stdio: 'inherit',
+  shell: process.platform === 'win32',
   env: { ...process.env, PAGES: '1' },
 })
 if (build.status !== 0) {
@@ -69,22 +73,19 @@ if (build.status !== 0) {
 async function romProbe() {
   const hex = join(REPO, 'roms', 'apple2e_char.hex')
   if (!existsSync(hex)) return null
-  const bytes = []
-  for (const line of (await readFile(hex, 'utf8')).split(/\r?\n/)) {
-    const tok = line.replace(/\/\/.*$/, '').trim().split(/\s+/)[0]
-    if (tok && /^[0-9a-fA-F]{1,2}$/.test(tok)) bytes.push(parseInt(tok, 16))
-  }
+  const bytes = parseHexDump(await readFile(hex, 'utf8'))
   // Glyph 1 is a capital A, and unlike a run of zeroes it cannot appear by
   // coincidence in a minified bundle.
   return bytes.length >= 32 ? bytes.slice(8, 24).join(',') : null
 }
 
-async function jsFiles(dir) {
+/** Every file under dir, any extension -- the checks below must not miss one. */
+async function allFiles(dir) {
   const out = []
   for (const e of await readdir(dir, { withFileTypes: true })) {
     const p = join(dir, e.name)
-    if (e.isDirectory()) out.push(...(await jsFiles(p)))
-    else if (e.name.endsWith('.js')) out.push(p)
+    if (e.isDirectory()) out.push(...(await allFiles(p)))
+    else out.push(p)
   }
   return out
 }
@@ -93,7 +94,7 @@ const probe = await romProbe()
 let problems = 0
 
 if (probe) {
-  const files = await jsFiles(DIST)
+  const files = (await allFiles(DIST)).filter((f) => f.endsWith('.js'))
   for (const f of files) {
     if ((await readFile(f, 'utf8')).includes(probe)) {
       console.error(`[pages] FAIL: the character ROM is in ${relative(REPO, f)}`)
@@ -105,7 +106,9 @@ if (probe) {
   log('no character ROM supplied, so nothing to check against (this build has none either)')
 }
 
-for (const f of await jsFiles(DIST)) {
+// Sourcemaps name source paths and would be 1.2 MB of noise; walk everything,
+// not just .js, so a stray .map cannot slip through.
+for (const f of await allFiles(DIST)) {
   if (f.endsWith('.map')) {
     console.error(`[pages] FAIL: a sourcemap would be published: ${relative(REPO, f)}`)
     problems++
@@ -162,7 +165,9 @@ await cp(DIST, OUT, { recursive: true })
 await writeFile(join(OUT, '.nojekyll'), '')
 
 let bytes = 0
-for (const f of await jsFiles(OUT)) bytes += (await stat(f)).size
+for (const f of await allFiles(OUT)) {
+  if (f.endsWith('.js')) bytes += (await stat(f)).size
+}
 log(`copied dist -> ${relative(REPO, OUT)}/ (${(bytes / 1024).toFixed(0)} KB of JavaScript)`)
 
 // The Pages URL, if we can work it out, because it is the thing you want next.

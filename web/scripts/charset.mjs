@@ -18,6 +18,8 @@ import { existsSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+import { parseHexDump } from './lib/charrom.mjs'
+
 const HERE = dirname(fileURLToPath(import.meta.url))
 const WEB = resolve(HERE, '..')
 const REPO = resolve(WEB, '..')
@@ -41,13 +43,7 @@ if (!src) {
 const raw = await readFile(src, 'utf8')
 
 // $readmemh: 2 hex digits per line, // comments, anything else ignored
-const bytes = []
-for (const line of raw.split(/\r?\n/)) {
-  const tok = line.replace(/\/\/.*$/, '').trim().split(/\s+/)[0]
-  if (!tok) continue
-  if (!/^[0-9a-fA-F]{1,2}$/.test(tok)) continue
-  bytes.push(parseInt(tok, 16))
-}
+const bytes = parseHexDump(raw)
 
 if (bytes.length < 2048) {
   console.error(

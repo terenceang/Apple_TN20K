@@ -1,6 +1,10 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { PADDLE_BUTTONS } from '../keymap.js'
+import { PADDLE_CENTER } from '../protocol.js'
 import { AppleGlyph } from './AppleGlyph.js'
+
+/** Only PB0/PB1 belong to the gamepad; any other bits pass through untouched. */
+const PB_MASK = PADDLE_BUTTONS.reduce((m, b) => m | b.bit, 0)
 
 interface Props {
   buttons: number
@@ -32,9 +36,9 @@ export function Gamepad({ buttons, x, y, onChange, onClose }: Props) {
   const stickRef = useRef<HTMLDivElement>(null)
   const isDragging = useRef(false)
 
-  // Reset paddles to center (128, 128)
+  // Reset paddles to center
   const onCenter = useCallback(() => {
-    onChange(buttons, 128, 128)
+    onChange(buttons, PADDLE_CENTER, PADDLE_CENTER)
   }, [buttons, onChange])
 
   // 2D Joystick Touch / Mouse interaction
@@ -70,7 +74,7 @@ export function Gamepad({ buttons, x, y, onChange, onClose }: Props) {
     if (isDragging.current) {
       isDragging.current = false
       if (springCenter) {
-        onChange(buttons, 128, 128)
+        onChange(buttons, PADDLE_CENTER, PADDLE_CENTER)
       }
     }
   }
@@ -106,8 +110,8 @@ export function Gamepad({ buttons, x, y, onChange, onClose }: Props) {
           const b1 = activeGp.buttons[1]?.pressed ? 2 : 0
           const gpButtons = b0 | b1
 
-          if (gpX !== x || gpY !== y || gpButtons !== (buttons & 0x03)) {
-            onChange((buttons & ~0x03) | gpButtons, gpX, gpY)
+          if (gpX !== x || gpY !== y || gpButtons !== (buttons & PB_MASK)) {
+            onChange((buttons & ~PB_MASK) | gpButtons, gpX, gpY)
           }
         } else if (detectedGamepad) {
           setDetectedGamepad(null)
@@ -130,7 +134,7 @@ export function Gamepad({ buttons, x, y, onChange, onClose }: Props) {
           type="button"
           className="opt-pill"
           onClick={onCenter}
-          title="Reset both paddles to center (128, 128)"
+          title={`Reset both paddles to center (${PADDLE_CENTER}, ${PADDLE_CENTER})`}
         >
           ⌖ Center
         </button>

@@ -1,17 +1,28 @@
 import { chromium } from 'playwright';
 import { spawn } from 'child_process';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const HERE = dirname(fileURLToPath(import.meta.url));
 
 async function run() {
   console.log('===============================================================');
   console.log(' Playwright E2E Hardware Test: Tang Nano 20K Apple //e');
   console.log('===============================================================');
 
-  // 1. Start UART pipe to the physical board on /dev/ttyUSB1
-  const uartProcess = spawn('python3', [
-    '/home/terence/Apple_TN20K/web/scripts/uart_pipe.py',
-    '/dev/ttyUSB1',
+  // 1. Start UART pipe to the physical board. The port is machine-specific
+  //    (the FPGA is one channel of the FT2232C), so set TN20K_PORT.
+  const port = process.env.TN20K_PORT;
+  if (!port) {
+    console.error('Set TN20K_PORT to the board\'s UART (e.g. TN20K_PORT=COM5 node scripts/test_playwright_tn20k.mjs)');
+    process.exit(1);
+  }
+  const python = process.env.PYTHON ?? 'python';
+  const uartProcess = spawn(python, [
+    join(HERE, 'uart_pipe.py'),
+    port,
     '115200'
-  ]);
+  ], { stdio: ['pipe', 'pipe', 'pipe'] });
 
   uartProcess.stderr.on('data', (d) => {
     console.log(`[UART Hardware]: ${d.toString().trim()}`);
@@ -200,18 +211,18 @@ async function run() {
   await debuggerToggle.click();
   await page.waitForTimeout(400);
 
-  const debuggerPane = page.locator('.debugger-pane');
+  const debuggerPane = page.locator('.debug-pane');
   console.log('Debugger pane visible:', await debuggerPane.isVisible());
 
   // Click "Regs" button in Debugger to query CPU registers from the FPGA
   console.log('[Action] Clicking Debugger "Regs" button...');
-  const regsBtn = page.locator('.debugger-pane button:has-text("Regs")');
+  const regsBtn = page.locator('.debug-pane button:has-text("Regs")');
   if (await regsBtn.isVisible()) {
     await regsBtn.click();
     await page.waitForTimeout(800);
   }
 
-  const regList = page.locator('.debugger-pane .reg-list');
+  const regList = page.locator('.debug-pane table.regs');
   if (await regList.isVisible()) {
     const regText = (await regList.textContent())?.trim();
     console.log(`Live CPU Registers from FPGA:\n${regText}`);
@@ -228,14 +239,14 @@ async function run() {
 
   // 12. Interact with Virtual Keyboard
   console.log('\n[Action] Clicking virtual keyboard keys...');
-  const keyH = page.locator('.keyboard-grid button:has-text("H")');
+  const keyH = page.locator('.board .cap[aria-label="h"]');
   if (await keyH.isVisible()) {
     await keyH.click();
     console.log('Clicked "H" key on virtual keyboard');
   }
 
   // 13. Save screenshot of live verified session
-  const screenshotPath = '/home/terence/Apple_TN20K/web/playwright_tn20k_success.png';
+  const screenshotPath = join(HERE, '..', 'playwright_tn20k_success.png');
   await page.screenshot({ path: screenshotPath });
   console.log(`\nScreenshot of live connected session saved to: ${screenshotPath}`);
 

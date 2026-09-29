@@ -21,12 +21,13 @@
 //  through `navigator`, so `node --test` can drive all of this with a fake.
 // ============================================================================
 
-import { CTRL_B, HANDSHAKE } from './protocol.js'
+import { CTRL_B, CMD, HANDSHAKE } from './protocol.js'
 
 export const BAUD = 115200
 const PROBE_TIMEOUT_MS = 2500
-/** 0x02 then '?', which makes the debugger print its help line. */
-const PROBE_BYTES = Uint8Array.from([CTRL_B, 0x3f])
+/** Ctrl+B then '?', which makes the debugger print its help line. */
+const PROBE_BYTE = CMD.help.charCodeAt(0)
+const PROBE_BYTES = Uint8Array.from([CTRL_B, PROBE_BYTE])
 
 /** Is Web Serial usable here at all? */
 export function serialSupported(serial) {
@@ -217,7 +218,7 @@ export class SerialLink {
       this.write(PROBE_BYTES)
       probe2Timer = setTimeout(() => {
         if (!settled) {
-          this.write(Uint8Array.from([0x3f]))
+          this.write(Uint8Array.from([PROBE_BYTE]))
         }
       }, 250)
     })
@@ -302,19 +303,5 @@ export class SerialLink {
     if (!preserveState && this.state !== 'error' && this.state !== 'wrong-port') {
       this.emit('idle')
     }
-  }
-}
-
-/**
- * Ports the browser has already been given permission for, so a returning user
- * can connect without a second trip through the picker.
- */
-export async function grantedPorts(serial) {
-  const s = serial ?? (typeof navigator !== 'undefined' ? navigator.serial : null)
-  if (!s || typeof s.getPorts !== 'function') return []
-  try {
-    return await s.getPorts()
-  } catch {
-    return []
   }
 }

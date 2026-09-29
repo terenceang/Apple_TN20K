@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useApple } from './useApple'
+import { isDebuggerToggle } from './keymap.js'
+import { PADDLE_CENTER } from './protocol.js'
 import { Keyboard } from './components/Keyboard'
 import { Console } from './components/Console'
 import { Screen } from './components/Screen'
@@ -20,7 +22,7 @@ export default function App() {
   const apple = useApple()
   const [held, setHeld] = useState({ shift: false, ctrl: false, caps: false, appleO: false, appleC: false })
   const [buttons, setButtons] = useState(0)
-  const [paddles, setPaddles] = useState({ x: 128, y: 128 })
+  const [paddles, setPaddles] = useState({ x: PADDLE_CENTER, y: PADDLE_CENTER })
 
   const store = typeof localStorage !== 'undefined' ? localStorage : null
 
@@ -30,42 +32,31 @@ export default function App() {
   const [showDebugger, setShowDebuggerState] = useState(() => getSavedBool(store, PREF_DEBUGGER, false))
   const [showPaddles, setShowPaddlesState] = useState(() => getSavedBool(store, PREF_PADDLES, true))
 
-  const setShowScreen = useCallback((show: boolean | ((prev: boolean) => boolean)) => {
-    setShowScreenState((prev) => {
-      const next = typeof show === 'function' ? show(prev) : show
-      setSavedBool(store, PREF_SCREEN, next)
-      return next
-    })
-  }, [store])
+  // One persistence wrapper; the four toggles differ only in key and setter.
+  const useToggle = (
+    key: string,
+    setter: (value: boolean | ((prev: boolean) => boolean)) => void,
+  ) =>
+    useCallback(
+      (show: boolean | ((prev: boolean) => boolean)) => {
+        setter((prev) => {
+          const next = typeof show === 'function' ? show(prev) : show
+          setSavedBool(store, key, next)
+          return next
+        })
+      },
+      [store, key, setter],
+    )
 
-  const setShowConsole = useCallback((show: boolean | ((prev: boolean) => boolean)) => {
-    setShowConsoleState((prev) => {
-      const next = typeof show === 'function' ? show(prev) : show
-      setSavedBool(store, PREF_CONSOLE, next)
-      return next
-    })
-  }, [store])
-
-  const setShowDebugger = useCallback((show: boolean | ((prev: boolean) => boolean)) => {
-    setShowDebuggerState((prev) => {
-      const next = typeof show === 'function' ? show(prev) : show
-      setSavedBool(store, PREF_DEBUGGER, next)
-      return next
-    })
-  }, [store])
-
-  const setShowPaddles = useCallback((show: boolean | ((prev: boolean) => boolean)) => {
-    setShowPaddlesState((prev) => {
-      const next = typeof show === 'function' ? show(prev) : show
-      setSavedBool(store, PREF_PADDLES, next)
-      return next
-    })
-  }, [store])
+  const setShowScreen = useToggle(PREF_SCREEN, setShowScreenState)
+  const setShowConsole = useToggle(PREF_CONSOLE, setShowConsoleState)
+  const setShowDebugger = useToggle(PREF_DEBUGGER, setShowDebuggerState)
+  const setShowPaddles = useToggle(PREF_PADDLES, setShowPaddlesState)
 
   // Ctrl+B is the debugger toggle. Automatically reveal the debugger pane when engaged.
   useEffect(() => {
     const h = (e: KeyboardEvent) => {
-      if (e.ctrlKey && !e.shiftKey && !e.altKey && e.code === 'KeyB') {
+      if (isDebuggerToggle(e)) {
         e.preventDefault()
         apple.toggleDebugger()
         setShowDebugger(true)

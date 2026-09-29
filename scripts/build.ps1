@@ -1,8 +1,8 @@
 # ============================================================================
 #  scripts/build.ps1 -- the single build path for this project.
 #
-#  Mirrors scripts/build.sh exactly.  Outputs to the same directories so the
-#  OpenFPGA Deck and this script are interchangeable:
+#  Outputs to the same directories the OpenFPGA Deck uses, so the two are
+#  interchangeable:
 #
 #    build\yosys\top.json          yosys synth_gowin
 #    build\pnr\top.pnr.json        nextpnr-himbaechel (+ build\reports\pnr.json)
@@ -33,9 +33,7 @@ $wantPack  = -not ($Synth -or $Pnr)
 
 # ── Parse fpga.yaml ─────────────────────────────────────────────────────────
 $yaml = Get-Content (Join-Path $root 'fpga.yaml') -Raw
-
-$name = ($yaml -split "`n" | Where-Object { $_ -match '^name:\s*(.+)' } | Select-Object -First 1) -replace '^name:\s*', ''
-$name = $name.Trim()
+$name = Get-FpgaName
 
 # constraints: block -> first '- <file>'
 $cst = ''
@@ -116,7 +114,7 @@ if ($wantPnr) {
         '--report' 'build/reports/pnr.json'
     if ($LASTEXITCODE -ne 0) { throw "nextpnr exited with code $LASTEXITCODE" }
 
-    # ── Timing check (mirrors the awk/sort logic in build.sh) ────────────────
+    # ── Timing check ─────────────────────────────────────────────────────────
     $pnrLog = Get-Content (Join-Path $root 'build\logs\pnr.log') -ErrorAction SilentlyContinue
     $maxFreqLines = $pnrLog | Select-String 'Max frequency'
     $maxFreqLines | ForEach-Object { Write-Host $_.Line }
@@ -136,7 +134,9 @@ if ($wantPnr) {
             throw "FAILED: $($worst.Clock) Fmax $($worst.Fmax) MHz is below the $mhz MHz target`n        see build\logs\pnr.log for the critical path"
         }
     } else {
-        Write-Warning "no 'Max frequency' line in build\logs\pnr.log; cannot check timing"
+        # No timing report means the gate cannot pass, so do not let a stale
+        # top.pnr.json quietly reach gowin_pack.
+        throw "no 'Max frequency for clock' line in build\logs\pnr.log; cannot check timing (is the log complete? see build\logs\pnr.log)"
     }
 }
 

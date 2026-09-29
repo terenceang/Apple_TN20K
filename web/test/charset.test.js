@@ -26,6 +26,7 @@ import { fileURLToPath } from 'node:url'
 
 import { dotRow, HAS_GLYPHS, GLYPH_W, GLYPH_H } from '../src/charset.js'
 import { screenToText } from '../src/stream.js'
+import { parseHexDump } from '../scripts/lib/charrom.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const REPO = resolve(HERE, '..', '..')
@@ -127,12 +128,7 @@ test('a cell code that is not printable is drawn blank, not as a control char',
 
 test('the hex file on disk is the same ROM the RTL reads', { skip: !available }, () => {
   // A cheap guard against rebuilding charset.json from the wrong file.
-  const raw = readFileSync(HEX, 'utf8')
-  const bytes = raw
-    .split(/\r?\n/)
-    .map((l) => l.replace(/\/\/.*$/, '').trim().split(/\s+/)[0])
-    .filter((t) => t && /^[0-9a-fA-F]{1,2}$/.test(t))
-    .map((t) => parseInt(t, 16))
+  const bytes = parseHexDump(readFileSync(HEX, 'utf8'))
   assert.ok(bytes.length >= 2048, 'char_rom_addr is 12 bits, so 2048 bytes minimum')
   // the eight bytes of glyph 1 spell an A with bit 1 lit
   assert.deepEqual(bytes.slice(8, 16), [0x08, 0x14, 0x22, 0x22, 0x3e, 0x22, 0x22, 0x00])

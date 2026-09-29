@@ -8,7 +8,7 @@ module clk_gen (
     output wire clk_pixel,    // 27.0 MHz pixel clock
     output wire pll_locked,   // PLL locked indicator
     output reg  ce_1m,        // 1.023 MHz clock enable for 6502 CPU
-    output reg  flash_clk     // ~2 Hz flashing text clock
+    output reg  flash_clk     // ~1.6 Hz flashing text clock
 );
 
     // Gowin rPLL instance: 27 MHz in -> 135 MHz out (5x TMDS serial clock)
@@ -72,7 +72,7 @@ module clk_gen (
         end
     end
 
-    // Flash clock: ~2 Hz for Apple II flashing characters
+    // Flash clock: ~1.6 Hz for Apple II flashing characters
     // 27,000,000 / 2^24 = ~1.61 Hz
     reg [23:0] flash_cnt = 24'd0;
     always @(posedge clk_pixel or posedge rst_in) begin

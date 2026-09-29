@@ -1,6 +1,14 @@
 import { useEffect, useRef, useState } from 'react'
 import { KEYS, boardBox, CAPTION } from '../keyboard/layouts.js'
-import { hostKey, isModifier, REPEAT_DELAY_MS, REPEAT_INTERVAL_MS } from '../keymap.js'
+import {
+  hostKey,
+  isModifier,
+  isDebuggerToggle,
+  paddleButtonBits,
+  REPEAT_DELAY_MS,
+  REPEAT_INTERVAL_MS,
+} from '../keymap.js'
+import { BAUD } from '../serial-link.js'
 import { AppleGlyph } from './AppleGlyph.js'
 import type { Conn, Mode } from '../useApple'
 
@@ -57,11 +65,11 @@ export function Keyboard({ mode, onPress, onReset, onRelease, held, conn, canSer
     const update = () => {
       const w = el.clientWidth
       if (w > 0) {
-        // Total key units across is 17 (16.5 board width + 0.5 left margin)
-        // Bezel padding is 12px on each side (24px)
+        // Total key units across: the board width plus the 0.5-unit left
+        // margin every cap is drawn at. Bezel padding is 12px on each side.
         const available = w - 24
         // Calculate unit to fill available width: minimum 34px, up to 70px
-        const computed = Math.min(70, Math.max(34, Math.floor(available / 17)))
+        const computed = Math.min(70, Math.max(34, Math.floor(available / (boardBox().width + 0.5))))
         setUnit(computed)
       }
     }
@@ -97,6 +105,9 @@ export function Keyboard({ mode, onPress, onReset, onRelease, held, conn, canSer
   const isConnectedRef = useRef(isConnected)
   isConnectedRef.current = isConnected
 
+  /** The paddle buttons held with a keypress (Open/Solid-Apple). */
+  const heldButtons = () => paddleButtonBits(heldRef.current)
+
   useEffect(() => {
     const typingInto = (t: EventTarget | null) =>
       t instanceof HTMLElement && /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName)
@@ -108,9 +119,6 @@ export function Keyboard({ mode, onPress, onReset, onRelease, held, conn, canSer
       ticker.current = null
       repeatId.current = null
     }
-
-    const heldButtons = () =>
-      (heldRef.current.appleO ? 0b001 : 0) | (heldRef.current.appleC ? 0b010 : 0)
 
     const press = (id: string) => {
       triggerActivity()
@@ -130,7 +138,7 @@ export function Keyboard({ mode, onPress, onReset, onRelease, held, conn, canSer
       if (!id) return
       // Ctrl+B is the debugger toggle and never reaches the //e -- the
       // firmware drops 0x02 before the keyboard sees it -- so App handles it.
-      if (e.ctrlKey && !e.shiftKey && !e.altKey && e.code === 'KeyB') return
+      if (isDebuggerToggle(e)) return
       e.preventDefault()
       if (e.repeat) return // our own timer drives repeats, at the //e's rate
       mods.current = { shift: e.shiftKey, ctrl: e.ctrlKey }
@@ -199,7 +207,7 @@ export function Keyboard({ mode, onPress, onReset, onRelease, held, conn, canSer
   }, [onPress, onReset, onRelease])
 
   const capDown = (k: Cap, capEvent: 'down' | 'up') => {
-    const buttons = (heldRef.current.appleO ? 0b001 : 0) | (heldRef.current.appleC ? 0b010 : 0)
+    const buttons = heldButtons()
     if (k.id === 'reset') {
       // CONTROL-RESET, from the on-screen cap: only with CONTROL held
       if (capEvent === 'up') onReset?.(false, buttons)
@@ -232,6 +240,8 @@ export function Keyboard({ mode, onPress, onReset, onRelease, held, conn, canSer
   const isApple = (k: Cap) => legend(k) === 'open' || legend(k) === 'solid'
   const caption = (k: Cap) => CAPTION[k.id as keyof typeof CAPTION]
   const board = boardBox()
+  // Total key units across: the board plus the 0.5-unit left margin at line 341.
+  const UNITS = board.width + 0.5
 
   return (
     <div className={'keyboard-case' + (!isConnected ? ' offline-case' : '')}>
@@ -244,7 +254,7 @@ export function Keyboard({ mode, onPress, onReset, onRelease, held, conn, canSer
             }`}
             title={
               isConnected
-                ? 'Tang Nano 20K connected (115200 8N1)'
+                ? `Tang Nano 20K connected (${BAUD} 8N1)`
                 : isConnecting
                 ? 'Connecting to Tang Nano 20K...'
                 : isWrongPort
@@ -275,7 +285,9 @@ export function Keyboard({ mode, onPress, onReset, onRelease, held, conn, canSer
             <div className={`kb-notice ${warnDisconnected || isWrongPort ? 'alert' : ''}`}>
               <span className="kb-notice-msg">
                 {isWrongPort
-                  ? '⚠️ Wrong USB Port! Selected port did not respond to Apple //e probe. Tang Nano 20K requires Channel B (UART). In Device Manager, enable "Load VCP" for Converter B.'
+                  ? conn?.detail
+                    ? `⚠️ Wrong USB Port! ${conn.detail}`
+                    : '⚠️ Wrong USB Port! Selected port did not respond to Apple //e probe.'
                   : warnDisconnected
                   ? '⚠️ Not connected! Keystrokes are not reaching the board.'
                   : 'Hardware offline'}
@@ -295,7 +307,7 @@ export function Keyboard({ mode, onPress, onReset, onRelease, held, conn, canSer
           )}
           {isConnected && (
             <span className="kb-connected-tag">
-              <span className="online-dot" /> Online • 115200 8N1
+              <span className="online-dot" /> Online • {BAUD} 8N1
             </span>
           )}
         </div>
@@ -305,7 +317,7 @@ export function Keyboard({ mode, onPress, onReset, onRelease, held, conn, canSer
         <div
           className={'board' + (!isConnected ? ' board-offline' : '')}
           style={{
-            width: 17 * unit,
+            width: UNITS * unit,
             height: board.height * unit,
             ['--unit' as string]: `${unit}px`,
           }}

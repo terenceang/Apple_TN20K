@@ -68,7 +68,7 @@ module aux_ram (
     reg  [21:0] sd_addr = 22'd0;
     wire [15:0] sd_dout;
     wire        sd_ready;
-    wire [12:0] sd_a13;
+    wire [12:0] sd_a13; // [12:11] unused: the part has an 11-bit address bus
 
     sdram u_sdram (
         .sd_clk(O_sdram_clk), .sd_cke(O_sdram_cke), .sd_data(IO_sdram_dq),
@@ -97,7 +97,10 @@ module aux_ram (
     reg        fill_active = 1'b0;
     reg [4:0]  fill_i = 5'd0;
     reg [14:0] fill_base = 15'd0;
-    reg [7:0]  linebuf [0:39];
+    // One 40-byte Apple text row (20 SDRAM words of two bytes); the size must
+    // match the 40-column row video_generator.v fills it for.
+    localparam LINE_BYTES = 40;
+    reg [7:0]  linebuf [0:LINE_BYTES-1];
     assign line_data = linebuf[col];
 
     // CPU write buffer
@@ -161,7 +164,7 @@ module aux_ram (
                         linebuf[{fill_i, 1'b0}] <= sd_dout[15:8];
                         linebuf[{fill_i, 1'b1}] <= sd_dout[7:0];
                         fill_i <= fill_i + 1'b1;
-                        if (fill_i == 5'd19) fill_active <= 1'b0;
+                        if (fill_i == LINE_BYTES/2 - 1) fill_active <= 1'b0;
                     end
                     K_WR: wr_pend <= 1'b0;
                     K_RD: begin

@@ -2,7 +2,7 @@
 //  hdmi_defs.vh -- shared constants: TMDS period codes and the video mode
 //
 //  The single definition of both.  RTL module parameters default to the VM_
-//  values, src/top.v uses those defaults, and scripts/build.sh takes the
+//  values, src/top.v uses those defaults, and scripts/build.ps1 takes the
 //  timing target from VM_PIXEL_HZ.
 // ============================================================================
 `ifndef HDMI_DEFS_VH

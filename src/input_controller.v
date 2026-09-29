@@ -24,6 +24,8 @@
 // Apple II ROMs take D6-D0 as the final character, so nothing downstream needs
 // to know a modifier was held.
 
+`include "src/uart_defs.vh"
+
 module input_controller (
     input  wire        clk,           // 27.0 MHz
     input  wire        reset,
@@ -47,10 +49,9 @@ module input_controller (
     output wire        kbd_reset      // RESET key held
 );
 
-    // 115200 baud receiver at 27 MHz:
-    // 27,000,000 / 115,200 = 234.375 cycles per bit
-    localparam [8:0] CLKS_PER_BIT = 9'd234;
-    localparam [8:0] HALF_BIT     = 9'd117;
+    // 115200 baud receiver at 27 MHz; the divisor is src/uart_defs.vh
+    localparam [8:0] CLKS_PER_BIT = `UART_CLKS_PER_BIT;
+    localparam [8:0] HALF_BIT     = `UART_CLKS_HALF_BIT;
 
     // UART RX synchronizer
     reg [2:0] rx_sync;
@@ -194,6 +195,27 @@ module input_controller (
                           (urx_byte == 8'h7F || urx_byte == 8'h08) ? 7'h08 :
                           urx_byte[6:0];
 
+    // Deliver a legacy (plain ASCII style) key: strobe it into $C000 and hold
+    // AKD for ~100 ms, since a plain sender has no release event. The FE key
+    // packet path below keeps AKD until FF 04 instead, so it does not use this.
+    task deliver_key(input [6:0] k);
+        begin
+            kbd_data   <= {1'b1, k};
+            akd        <= 1'b1;
+            akd_legacy <= 1'b1;
+            akd_cnt    <= AKD_LEGACY_CLKS;
+        end
+    endtask
+
+    // The paddle-button bits of a FE/FF packet (PB0/PB1/PB2)
+    task latch_buttons(input [7:0] b);
+        begin
+            pb0 <= b[0];
+            pb1 <= b[1];
+            pb2 <= b[2];
+        end
+    endtask
+
     always @(posedge clk or posedge reset) begin
         if (reset) begin
             kbd_data  <= 8'h00;
@@ -225,11 +247,8 @@ module input_controller (
             if (pkt_state == PKT_ESC && !urx_valid) begin
                 esc_cnt <= esc_cnt + 1'b1;
                 if (&esc_cnt) begin
-                    kbd_data   <= {1'b1, 7'h1B};
-                    akd        <= 1'b1;
-                    akd_legacy <= 1'b1;
-                    akd_cnt    <= AKD_LEGACY_CLKS;
-                    pkt_state  <= PKT_NORMAL;
+                    deliver_key(7'h1B);
+                    pkt_state <= PKT_NORMAL;
                 end
             end else begin
                 esc_cnt <= 20'd0;
@@ -252,10 +271,7 @@ module input_controller (
                             pkt_state <= PKT_ESC;
                         end else begin
                             // Standard keystroke, with strobe
-                            kbd_data   <= {1'b1, norm_key};
-                            akd        <= 1'b1;
-                            akd_legacy <= 1'b1;
-                            akd_cnt    <= AKD_LEGACY_CLKS;
+                            deliver_key(norm_key);
                         end
                     end
 
@@ -263,10 +279,7 @@ module input_controller (
                         if (urx_byte == 8'h5B) // '['
                             pkt_state <= PKT_BRACKET;
                         else begin
-                            kbd_data   <= {1'b1, 7'h1B}; // Raw ESC key
-                            akd        <= 1'b1;
-                            akd_legacy <= 1'b1;
-                            akd_cnt    <= AKD_LEGACY_CLKS;
+                            deliver_key(7'h1B); // Raw ESC key
                             // ...and the byte that followed it is not lost
                             if (urx_byte == 8'hFF)      pkt_state <= PKT_GP_HDR;
                             else if (urx_byte == 8'hFE) pkt_state <= PKT_KEY_CODE;
@@ -281,17 +294,12 @@ module input_controller (
 
                     PKT_BRACKET: begin
                         case (urx_byte)
-                            8'h41: kbd_data <= {1'b1, 7'h0B}; // Up Arrow (Ctrl-K / 0x0B)
-                            8'h42: kbd_data <= {1'b1, 7'h0A}; // Down Arrow (Ctrl-J / 0x0A)
-                            8'h43: kbd_data <= {1'b1, 7'h15}; // Right Arrow (Ctrl-U / 0x15)
-                            8'h44: kbd_data <= {1'b1, 7'h08}; // Left Arrow (Ctrl-H / 0x08)
+                            8'h41: deliver_key(7'h0B); // Up Arrow (Ctrl-K / 0x0B)
+                            8'h42: deliver_key(7'h0A); // Down Arrow (Ctrl-J / 0x0A)
+                            8'h43: deliver_key(7'h15); // Right Arrow (Ctrl-U / 0x15)
+                            8'h44: deliver_key(7'h08); // Left Arrow (Ctrl-H / 0x08)
                             default: ;
                         endcase
-                        if (urx_byte >= 8'h41 && urx_byte <= 8'h44) begin
-                            akd        <= 1'b1;
-                            akd_legacy <= 1'b1;
-                            akd_cnt    <= AKD_LEGACY_CLKS;
-                        end
                         pkt_state <= PKT_NORMAL;
                     end
 
@@ -307,9 +315,7 @@ module input_controller (
                     end
 
                     PKT_GP_BTN: begin
-                        pb0 <= urx_byte[0];
-                        pb1 <= urx_byte[1];
-                        pb2 <= urx_byte[2];
+                        latch_buttons(urx_byte);
                         pkt_state <= PKT_GP_X;
                     end
 
@@ -338,16 +344,12 @@ module input_controller (
                     end
 
                     PKT_KEY_BTN: begin
-                        pb0 <= urx_byte[0];
-                        pb1 <= urx_byte[1];
-                        pb2 <= urx_byte[2];
+                        latch_buttons(urx_byte);
                         pkt_state <= PKT_NORMAL;
                     end
 
                     PKT_RST_BTN: begin
-                        pb0       <= urx_byte[0];
-                        pb1       <= urx_byte[1];
-                        pb2       <= urx_byte[2];
+                        latch_buttons(urx_byte);
                         key_reset <= urx_byte[3];
                         pkt_state <= PKT_NORMAL;
                     end
@@ -389,9 +391,9 @@ module input_controller (
     always @(*) begin
         case (io_addr[7:4])
             4'h0:       io_dout = kbd_data;                 // $C000-$C00F
-            4'h1:       io_dout = (io_addr[3:0] == 4'h0) ?
-                                  {akd, kbd_data[6:0]} :    // $C010: AKD + key
-                                  kbd_data;                 // $C011-$C01F: low 7 bits used
+            // Only $C010 is ours in this nibble (io_hit above); $C011-$C01F
+            // are status reads the core answers with softswitch_read_data.
+            4'h1:       io_dout = {akd, kbd_data[6:0]};     // $C010: AKD + key
             4'h6:       io_dout = {in_bit, 7'h00};          // $C060-$C06F
             default:    io_dout = 8'h00;                    // $C070-$C07F & others
         endcase

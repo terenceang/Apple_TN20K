@@ -78,6 +78,19 @@ module apple2_core (
     // contention/corruption between video prefetch and CPU RAM reads/writes,
     // avoiding display flickering/scrolling artifacts.
     reg ce_1m_pending;
+    // Dual-latch RAM arbitration between CPU and Video Generator (declared
+    // here because video_busy below reads vram_req_d; this iverilog rejects
+    // declaration-after-use).
+    reg vram_req_d;
+    always @(posedge clk or posedge reset) begin
+        if (reset)
+            vram_req_d <= 1'b0;
+        else
+            vram_req_d <= vram_req;
+    end
+    // aux_stall is the hold while an aux RAM access is not ready; assigned
+    // where its inputs are decoded, further down.
+    wire aux_stall;
     // The same hold applies while an aux RAM access is not ready (aux_stall).
     wire video_busy = vram_req || vram_req_d || aux_stall;
     wire cpu_ce = (ce_1m || ce_1m_pending) && !video_busy;
@@ -95,9 +108,10 @@ module apple2_core (
     // enable keeps ticking, and side effects must not replay on each tick.
     wire cpu_go = cpu_ce && cpu_rdy;
 
+    wire addr_is_c0 = (cpu_addr[15:8] == 8'hC0);
     assign io_addr  = cpu_addr[7:0];
-    assign io_read  = cpu_go && !cpu_we && (cpu_addr[15:8] == 8'hC0);
-    assign io_write = cpu_go &&  cpu_we && (cpu_addr[15:8] == 8'hC0);
+    assign io_read  = cpu_go && !cpu_we && addr_is_c0;
+    assign io_write = cpu_go &&  cpu_we && addr_is_c0;
 
     assign debug_cpu_addr = cpu_addr;
     assign debug_cpu_dout = cpu_dout;
@@ -114,7 +128,7 @@ module apple2_core (
         .WE(cpu_we),
         .IRQ(1'b0),
         .NMI(1'b0),
-        .RDY(cpu_ce & cpu_rdy),
+        .RDY(cpu_go),
         .SYNC(cpu_sync),
         .debug_a(debug_cpu_a),
         .debug_x(debug_cpu_x),
@@ -168,7 +182,7 @@ module apple2_core (
             else if (cpu_addr == 16'hCFFF)
                 intc8rom <= 1'b0;
 
-            if (cpu_addr[15:8] == 8'hC0) begin
+            if (addr_is_c0) begin
                 // Speaker toggle at $C030
                 if (cpu_addr[7:4] == 4'h3) begin
                     spkr_pulse <= 1'b1;
@@ -255,7 +269,7 @@ module apple2_core (
     wire aux_sel_rd    = aux_sel_cpu_rd || dbg_aux_sel;
     assign aux_rd_want = (aux_sel_cpu_rd && !cpu_we) || dbg_aux_sel;
     assign dbg_mem_ready = !dbg_aux_sel || aux_rd_hit;
-    wire   aux_stall   = (aux_sel_cpu_rd && !cpu_we && !aux_rd_hit) || (aux_sel_wr && cpu_we && aux_wr_busy);
+    assign aux_stall   = (aux_sel_cpu_rd && !cpu_we && !aux_rd_hit) || (aux_sel_wr && cpu_we && aux_wr_busy);
     assign aux_wr_go   = cpu_go && cpu_we && aux_sel_wr;
     assign aux_wr_data = cpu_dout;
 
@@ -263,16 +277,7 @@ module apple2_core (
     // Writes go to RAM if in $0000-$BFFF, or if in $D000-$FFFF with lc_write_ram enabled
     // (and not to the aux RAM instead)
     wire ram_we_cpu = cpu_we && !aux_sel_wr && (is_ram_base || (is_lc_area && lc_write_ram));
-    wire ram_we     = (cpu_ce && cpu_rdy) ? ram_we_cpu : 1'b0;
-
-    // Dual-latch RAM arbitration between CPU and Video Generator
-    reg vram_req_d;
-    always @(posedge clk or posedge reset) begin
-        if (reset)
-            vram_req_d <= 1'b0;
-        else
-            vram_req_d <= vram_req;
-    end
+    wire ram_we     = cpu_go ? ram_we_cpu : 1'b0;
 
     wire is_lc_bank2_d = lc_bank2 && (effective_cpu_addr >= 16'hD000 && effective_cpu_addr < 16'hE000);
     wire [15:0] cpu_ram_addr = is_lc_bank2_d ? {4'hC, effective_cpu_addr[11:0]} : effective_cpu_addr;
@@ -386,7 +391,7 @@ module apple2_core (
     always @(posedge clk or posedge reset) begin
         if (reset)
             cpu_din <= 8'h00;
-        else if (cpu_ce && cpu_rdy)
+        else if (cpu_go)
             cpu_din <= cpu_din_comb;
     end
 

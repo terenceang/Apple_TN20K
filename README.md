@@ -37,14 +37,8 @@ Pages** to serve `/docs` from `main`; the site will be at
 `docs/` is entirely published, so nothing that should not be public goes there
 — the board documentation lives in `Documents/`.
 
-A WebSocket bridge is included for a board plugged into *another* machine, for
-browsers without Web Serial, and for the flash buttons:
-
-```sh
-make web-install web-build
-make bridge               # http://127.0.0.1:8781
-make web-test             # the keymap is an era check; see web/README.md
-```
+The app talks to the board over Web Serial directly, so it needs a
+Chromium-based browser and the board plugged into the machine it runs on.
 
 The screen is drawn from the same 2732 video ROM the FPGA reads, so it needs the
 ROM supplied first — see [`web/README.md`](web/README.md).
@@ -67,25 +61,25 @@ make flash      # write to onboard flash (persistent)
 make clean
 ```
 
-`make` is a thin wrapper around `scripts/build.sh`, which is the single build implementation, so the Makefile and the **OpenFPGA Deck** extension produce the same netlist at the same paths. The RTL file list lives in `fpga.yaml`; add new source files there. `scripts/build.sh` fails the build if the achieved Fmax falls below the 27 MHz target, and `constraints/top.sdc` is available for a stricter two-domain timing analysis.
+`make` is a thin wrapper around `scripts/build.ps1`, which is the single build implementation, so the Makefile and the **OpenFPGA Deck** extension produce the same netlist at the same paths. The RTL file list lives in `fpga.yaml`; add new source files there. `scripts/build.ps1` fails the build if the achieved Fmax falls below the 27 MHz target, and `constraints/top.sdc` is available for a stricter two-domain timing analysis.
 
-To keep the HDMI core honest, `scripts/hdmi_diff.sh --check` verifies `src/hdmi/` still matches its recorded snapshot, and `--upstream` reports what has changed in the TN20K-HDMI project since.
+To keep the HDMI core honest, `scripts/hdmi_diff.ps1 -Check` verifies `src/hdmi/` still matches its recorded snapshot, and `-Upstream` reports what has changed in the TN20K-HDMI project since.
 
 ```sh
-sim/run.sh      # run all testbenches with iverilog (~80 s; tb_top needs the ROMs)
+powershell -File sim\run.ps1    # run all testbenches with iverilog (~80 s; tb_top needs the ROMs)
 ```
 
-If building with the **OpenFPGA Deck** extension in VS Code or `scripts/build.sh` (which writes to `build/bitstream/Apple_TN20K.fs`), use the programming script:
+If building with the **OpenFPGA Deck** extension in VS Code or `scripts/build.ps1` (which writes to `build\bitstream\Apple_TN20K.fs`), use the programming script:
 
-```sh
-scripts/prog.sh         # load Deck bitstream into SRAM (volatile)
-scripts/prog.sh --flash # write Deck bitstream to onboard flash (persistent)
+```powershell
+scripts\prog.ps1           # load Deck bitstream into SRAM (volatile)
+scripts\prog.ps1 -Flash    # write Deck bitstream to onboard flash (persistent)
 ```
 
 You can also run the stages separately with `make synth` and `make pnr`. Timing failures are allowed in place & route, so check the nextpnr report after making changes.
 
 ```sh
-sim/run.sh      # run all testbenches with iverilog (~1 min; tb_top needs the ROMs)
+sim/run.ps1      # run all testbenches with iverilog (~1 min; tb_top needs the ROMs)
 ```
 
 HDMI audio needs a display that accepts HDMI audio (not a DVI-only input). Hold **S1** to switch the output to color bars and a 1 kHz tone, to check the HDMI link independently of the Apple core.
@@ -227,14 +221,14 @@ src/clk_gen.v           PLL (135 MHz TMDS) and 1 MHz / 14 MHz clock enables
 src/video_generator.v   Apple II raster into the 720x480 frame
 src/colorbar_gen.v      HDMI bring-up color bars (hold S1)
 src/hdmi/               HDMI transmitter: timing, TMDS, data islands, audio/InfoFrame packets
-sim/                    iverilog testbenches (sim/run.sh)
+sim/                    iverilog testbenches (sim/run.ps1)
 src/sound_generator.v   speaker to I2S
 src/input_controller.v  UART RX, keyboard, gamepad, $C0xx input registers
 src/serial_debugger.v   UART TX, console mirror, hardware debugger, screen dump
 src/cpu/                65C02 core
 constraints/top.cst     pin assignments
 roms/                   ROM images (supply your own)
-scripts/                Deck-compatible build, programming and bridge scripts
+scripts/                build, programming, verification and snapshot scripts
 web/                    React keyboard, screen and debugger (see web/README.md)
 ```
 
@@ -242,4 +236,4 @@ web/                    React keyboard, screen and debugger (see web/README.md)
 
 [MIT](LICENSE) © 2026 Terence Ang.
 
-The HDMI transmitter in `src/hdmi/` is a local copy of the one from the TN20K-HDMI project, taken at commit `388b39e` and differing only in `hdmi_tx`'s `RGB_QUANT` parameter. `scripts/hdmi_snapshot.sha256` records the snapshot and `scripts/hdmi_diff.sh --check` fails if it is edited locally without being re-baselined; `--upstream` reports what has changed in the other project since. The 65C02 core in `src/cpu/` is by Arlet Ottens, David Banks and Ed Spittles, and stays under its original permissive terms (see the file headers). Apple //e ROMs are copyright Apple and are not part of this project.
+The HDMI transmitter in `src/hdmi/` is a local copy of the one from the TN20K-HDMI project, taken at commit `388b39e` and differing only in `hdmi_tx`'s `RGB_QUANT` parameter. `scripts/hdmi_snapshot.sha256` records the snapshot and `scripts/hdmi_diff.ps1 -Check` fails if it is edited locally without being re-baselined; `-Upstream` reports what has changed in the other project since. The 65C02 core in `src/cpu/` is by Arlet Ottens, David Banks and Ed Spittles, and stays under its original permissive terms (see the file headers). Apple //e ROMs are copyright Apple and are not part of this project.

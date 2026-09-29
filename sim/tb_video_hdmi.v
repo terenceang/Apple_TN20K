@@ -375,6 +375,8 @@ module tb_video_hdmi;
     reg       realrom_ok = 1'b0;
     reg [7:0] real_file [0:65535];
     integer   probe_fd;
+    // Declared before any use (this iverilog rejects declaration-after-use)
+    integer i, frame_a_checked, bars_checked;
     initial begin
         // $readmemh cannot report failure, so look for the file first.
         probe_fd = $fopen("roms/apple2e_char.hex", "r");
@@ -443,7 +445,6 @@ module tb_video_hdmi;
     // -----------------------------------------------------------------------
     // Stimulus
     // -----------------------------------------------------------------------
-    integer i, frame_a_checked, bars_checked;
     initial begin
         if (realrom_ok) check_real_rom();
         // Synthetic char ROM: every glyph row distinct, so a wrong address

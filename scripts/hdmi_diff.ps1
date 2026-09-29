@@ -1,11 +1,10 @@
 # ============================================================================
 #  scripts/hdmi_diff.ps1 -- keep src/hdmi/ honest.
 #
-#  Mirrors scripts/hdmi_diff.sh:
-#    --Check     (default) verify src/hdmi/ against the recorded sha256 snapshot.
-#                Exits non-zero if any file was edited locally.
-#    --Upstream  diff src/hdmi/ against another checkout of TN20K-HDMI.
-#                Informational; always exits 0.
+#    -Check     (default) verify src/hdmi/ against the recorded sha256 snapshot.
+#               Exits non-zero if any file was edited locally.
+#    -Upstream  diff src/hdmi/ against another checkout of TN20K-HDMI.
+#               Informational; always exits 0.
 #
 #  Usage:
 #    scripts\hdmi_diff.ps1
@@ -59,12 +58,12 @@ if (-not $Upstream) {
         Write-Host "OK: src/hdmi/ is unmodified since the snapshot was taken."
         Write-Host "    only hdmi_tx.v was ever meant to differ upstream (RGB_QUANT)."
     } else {
-        Write-Error @"
+        Write-Error @'
 
-FAILED: src/hdmi/ has local edits not reflected in $SNAPSHOT.
+FAILED: src/hdmi/ has local edits not reflected in scripts/hdmi_snapshot.sha256.
   If they are intended, re-baseline with:
-    Push-Location src\hdmi; (Get-ChildItem *.v,*.vh | ForEach-Object { "$((Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower())  src/hdmi/$($_.Name)" }) | Set-Content ..\..\$SNAPSHOT; Pop-Location
-"@
+    Get-ChildItem src\hdmi -Include *.v,*.vh -Recurse | ForEach-Object { (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower() + '  src/hdmi/' + $_.Name } | Set-Content scripts\hdmi_snapshot.sha256 -Encoding ascii
+'@
         exit 1
     }
 }
@@ -82,7 +81,9 @@ else {
     Write-Host ""
 
     $drift = $false
-    $localFiles = Get-ChildItem (Join-Path $root 'src\hdmi') -Include '*.v','*.vh'
+    # -Include needs -Recurse (or a wildcard path) to see anything at all;
+    # without it this loop ran over zero files and always reported "no drift".
+    $localFiles = Get-ChildItem (Join-Path $root 'src\hdmi') -Include '*.v','*.vh' -Recurse
     foreach ($f in $localFiles) {
         $base = $f.Name
         $other = Join-Path $upstreamHdmi $base

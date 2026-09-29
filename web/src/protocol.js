@@ -60,9 +60,12 @@ export function encodeGamepad(buttons, x, y) {
 
 export function clampPaddle(v) {
   const n = Math.round(Number(v))
-  if (!Number.isFinite(n)) return 128
+  if (!Number.isFinite(n)) return PADDLE_CENTER
   return n < 0 ? 0 : n > 255 ? 255 : n
 }
+
+/** The centre the paddles rest at (also the RTL's reset value, $80). */
+export const PADDLE_CENTER = 128
 
 // ---------------------------------------------------------------------------
 //  What the firmware says back
@@ -73,10 +76,21 @@ export function clampPaddle(v) {
 //  sent too early is silently dropped.
 // ---------------------------------------------------------------------------
 
-export const BANNER = '\r\n[ Apple //e Debugger ] (h=Help, c=Cont)\r\n> '
-export const RESUME = '\r\n[Resuming...]\r\n'
+// The debugger's literal strings, byte for byte what serial_debugger.v sends.
+// stream.js parses against the plain texts; the wire forms keep the CRLFs and
+// trailing prompt so tests can replay exact firmware output.
+
+/** The line after Ctrl+B, without its CRLFs. */
+export const BANNER_TEXT = '[ Apple //e Debugger ] (h=Help, c=Cont)'
+/** The line when the machine is let go, without its CRLFs. */
+export const RESUME_TEXT = '[Resuming...]'
+/** The idle prompt the debugger types, without its CRLFs (and trailing space). */
+export const PROMPT_LINE = '>'
+
+export const BANNER = `\r\n${BANNER_TEXT}\r\n${PROMPT_LINE} `
+export const RESUME = `\r\n${RESUME_TEXT}\r\n`
 export const HELP = '\r\nCmds: r=Regs s=Step c=Cont m=Mem t=Stat w=Scr h=Help\r\n> '
-export const PROMPT = '\r\n> '
+export const PROMPT = `\r\n${PROMPT_LINE} `
 
 /** Substring that proves we are talking to the FPGA's UART, not the BL616's
  *  own console. Used by the bridge to pick the right FT2232C channel. */
@@ -111,8 +125,8 @@ export const MEM_JUMPS = [
 // ---------------------------------------------------------------------------
 //  W (screen dump) framing
 //
-//    $SS <flags>   one flag byte, then 24 rows of 40 bytes as hex
-//    $GF           four rows of 32 bytes as hex, mixed mode graphics page
+//    $SS <flags>   one flag byte, then the whole 1 KB text page as hex
+//    $GF           four rows of 40 bytes as hex: lo-res rows 20-23
 //    $SEND         end of the dump
 //
 //  All hex text so `picocom` shows something readable too.
@@ -121,13 +135,13 @@ export const MEM_JUMPS = [
 export const SCR_TEXT_ROWS = 24
 export const SCR_COLS = 40
 export const SCR_GFX_ROWS = 4
-export const SCR_GFX_ROW_BYTES = 32
+export const SCR_GFX_ROW_BYTES = 40
 /**
- * The W command streams the text page *contiguously*, so 1024 bytes, even
+ * The W command streams the text page *contiguously* -- all 1024 bytes of
+ * $0400-$07FF in memory order, the 64 interleaving holes included -- even
  * though only 24x40 = 960 of them are on screen: the Apple II interleaves the
- * page into three groups of eight rows 128 bytes apart, and the 64 bytes at
- * the end of each group are not displayed. Use textPageIndex() to go from a
- * row and column to a byte in that stream.
+ * page into three groups of eight rows 128 bytes apart. Use textPageIndex()
+ * to go from a row and column to a byte in that stream.
  */
 export const SCR_TEXT_BYTES = 1024
 export const SCR_GFX_BYTES = SCR_GFX_ROWS * SCR_GFX_ROW_BYTES
@@ -155,7 +169,9 @@ export const SCR_FLAG = {
 /**
  * Parse a hex run of `count` bytes. Tolerant of whitespace and of the frame
  * arriving in several chunks, because at 115200 a 1 KB dump arrives as ~150
- * separate serial reads.
+ * separate serial reads. stream.js keeps its own accumulated version (it pads
+ * a partially filled page rather than rejecting it), so this is only a helper
+ * for tools and tests.
  */
 export function parseHexChunk(s, count) {
   const out = new Uint8Array(count)
@@ -187,7 +203,3 @@ export const LORES_PALETTE = [
   [0x6f, 0xe8, 0xbf], // aquamarine
   [0xff, 0xff, 0xff], // white
 ]
-
-/** The green phosphor the video generator uses for text (video_generator.v). */
-export const PHOSPHOR_ON = [0x20, 0xe8, 0x20]
-export const PHOSPHOR_OFF = [0x02, 0x06, 0x02]

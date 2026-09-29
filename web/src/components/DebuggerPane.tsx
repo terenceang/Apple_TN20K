@@ -14,6 +14,7 @@ interface Props {
 
 const hex = (n: number, w = 2) => '$' + n.toString(16).toUpperCase().padStart(w, '0')
 
+/** The P register's bits, high to low; the legend under the flags cell. */
 const FLAG_NAMES = ['N', 'V', '-', 'B', 'D', 'I', 'Z', 'C']
 
 export function DebuggerPane({
@@ -69,11 +70,11 @@ export function DebuggerPane({
                   <th>P</th>
                   <td colSpan={3} className="flags">
                     {regs.flags.split('').map((f, i) => (
-                      <span key={i} className={f === '-' ? 'off' : 'on'}>
-                        {f}
-                      </span>
+                    <span key={i} className={f === '-' ? 'off' : 'on'}>
+                      {f}
+                    </span>
                     ))}
-                    <span className="legend"> N V - B D I Z C</span>
+                    <span className="legend"> {FLAG_NAMES.join(' ')}</span>
                   </td>
                 </tr>
               </tbody>
@@ -177,5 +178,3 @@ export function DebuggerPane({
     </section>
   )
 }
-
-export { FLAG_NAMES }

@@ -1,14 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AppleStream } from './stream.js'
-import { encodeGamepad, encodeKey, encodeKeysUp, encodeReset } from './protocol.js'
+import { encodeGamepad, encodeKey, encodeKeysUp, encodeReset, CTRL_B, CMD } from './protocol.js'
 import { SerialLink, serialSupported, BAUD } from './serial-link.js'
 import { isLetter, resolve } from './keymap.js'
 
 export type ConnState =
   | 'idle'
   | 'opening'
+  | 'open-unchecked'
   | 'probing'
-  | 'connecting'
   | 'open'
   | 'wrong-port'
   | 'error'
@@ -132,7 +132,6 @@ export function useApple() {
   const [mem, setMem] = useState<MemLine[]>([])
   const [status, setStatus] = useState<Status | null>(null)
   const [screen, setScreen] = useState<Screen | null>(null)
-  const [bells, setBells] = useState(0)
   const [busy, setBusy] = useState(false)
   const [canSerial, setCanSerial] = useState(false)
 
@@ -142,8 +141,7 @@ export function useApple() {
    * Hand a command to the debugger and let the quiet timer release it, so it
    * cannot be dropped by arriving while the machine is still busy.
    */
-  const release = useCallback((...bytes: number[]) => {
-    queue.current.push(...bytes)
+  const flushQuiet = useCallback(() => {
     if (quiet.current) clearTimeout(quiet.current)
     quiet.current = setTimeout(() => {
       quiet.current = null
@@ -154,18 +152,19 @@ export function useApple() {
     }, QUIET_MS)
   }, [])
 
+  const release = useCallback(
+    (...bytes: number[]) => {
+      queue.current.push(...bytes)
+      flushQuiet()
+    },
+    [flushQuiet],
+  )
+
   // --- one place that turns bytes into everything the UI shows -----------
   const onBytes = useCallback(
     (bytes: Uint8Array) => {
       // Any byte at all means the machine is busy, so restart the quiet timer.
-      if (quiet.current) clearTimeout(quiet.current)
-      quiet.current = setTimeout(() => {
-        quiet.current = null
-        if (queue.current.length) {
-          link.current?.write(queue.current)
-          queue.current = []
-        }
-      }, QUIET_MS)
+      flushQuiet()
 
       // stream.js is plain JS so node --test can drive it; the event shapes are
       // a discriminated union on `t`, cast once here rather than throughout.
@@ -206,18 +205,18 @@ export function useApple() {
             }
             if (wantResumeAfterScreen.current) {
               wantResumeAfterScreen.current = false
-              release(0x63) // 'c' -- resume
+              release(CMD.cont.charCodeAt(0)) // resume once the dump is home
             }
             break
           case 'bell':
-            setBells((n) => n + 1)
+            // Counted only for the tests; the UI does not surface it.
             break
           default:
             break
         }
       }
     },
-    [release],
+    [release, flushQuiet],
   )
 
   useEffect(() => {
@@ -302,15 +301,15 @@ export function useApple() {
     send(encodeKeysUp())
   }, [mode, send])
 
-  const toggleDebugger = useCallback(() => send([0x02]), [send])
+  const toggleDebugger = useCallback(() => send([CTRL_B]), [send])
 
   /** Freeze, dump the screen, and let it run again. */
   const captureScreen = useCallback(() => {
     setBusy(true)
     wantResumeAfterScreen.current = true
-    if (mode !== 'debugger') send([0x02])
+    if (mode !== 'debugger') send([CTRL_B])
     // 'w' once the banner and register dump have gone by
-    release(0x77)
+    release(CMD.screen.charCodeAt(0))
     // If no frame comes back -- the machine was not in a state to answer, or the
     // port went away -- do not leave the button stuck on "Capturing...".
     if (captureTimeout.current) clearTimeout(captureTimeout.current)
@@ -347,7 +346,6 @@ export function useApple() {
       mem,
       status,
       screen,
-      bells,
       busy,
       pressKey,
       resetKey,
@@ -372,7 +370,6 @@ export function useApple() {
       mem,
       status,
       screen,
-      bells,
       busy,
       pressKey,
       resetKey,

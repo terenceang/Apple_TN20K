@@ -55,20 +55,21 @@ module video_generator (
     output wire        vbl
 );
 
-    localparam H_VISIBLE     = 720;
-    localparam V_VISIBLE     = 480;
-
     // VBL status for Apple II ($C019: bit 7 = 1 during vertical blanking)
-    assign vbl = (v_cnt >= 432);
-
     // Apple II active area: 560x384 centered in 720x480
     // X: 80 .. 639 (560 pixels = 40 cols * 14 px)
     // Y: 48 .. 431 (384 lines = 192 lines * 2)
-    wire in_apple_x = (h_cnt >= 80 && h_cnt < 640);
-    wire in_apple_y = (v_cnt >= 48 && v_cnt < 432);
+    localparam [9:0] A2_X0 = 10'd80, A2_X1 = 10'd640; // first h_cnt in / past the Apple area
+    localparam [9:0] A2_Y0 = 10'd48, A2_Y1 = 10'd432; // first v_cnt in / past the Apple area
+    localparam [9:0] A2_PRE0 = A2_X0 - 10'd14;        // the pre-roll slot before column 0
+
+    assign vbl = (v_cnt >= A2_Y1);
+
+    wire in_apple_x = (h_cnt >= A2_X0) && (h_cnt < A2_X1);
+    wire in_apple_y = (v_cnt >= A2_Y0) && (v_cnt < A2_Y1);
     wire in_apple_screen = in_apple_x && in_apple_y;
 
-    wire [8:0] a2_y = in_apple_y ? ((v_cnt - 10'd48) >> 1) : 9'd0; // 0..191
+    wire [8:0] a2_y = in_apple_y ? ((v_cnt - A2_Y0) >> 1) : 9'd0; // 0..191
 
     // Text row (0..23) and column (0..39)
     wire [4:0] text_row = a2_y[7:3];       // a2_y / 8
@@ -85,14 +86,13 @@ module video_generator (
     // Double hi-res shares the wide slot: an aux byte then a main byte per 14 clocks,
     // fetched at sub_col 8 so both are latched by sub_col 10.
     wire dh           = col80 && dhires && hires_mode && !is_text_line;
-    wire pre          = (h_cnt >= 10'd66) && (h_cnt < 10'd80);
+    wire pre          = (h_cnt >= A2_PRE0) && (h_cnt < A2_X0);
     wire slot_act     = in_apple_x || pre;
-    wire [3:0] eff_sub = in_apple_x ? sub_col : (h_cnt - 10'd66);
-    wire [3:0] req_sub = (wide || dh) ? 4'd8 : 4'd9;
-
     // Column counter (0..39)
     reg [5:0] col_cnt;
     reg [3:0] sub_col; // 0..13 (14 cycles per character)
+    wire [3:0] eff_sub = in_apple_x ? sub_col : (h_cnt - A2_PRE0);
+    wire [3:0] req_sub = (wide || dh) ? 4'd8 : 4'd9;
 
     always @(posedge clk_pixel or posedge reset) begin
         if (reset) begin
@@ -116,9 +116,13 @@ module video_generator (
 
     // Apple II text/lores interleaved memory base address calculation:
     // Screen is split into 3 groups of 8 rows (each 128 bytes apart), offset by 40 bytes per group.
-    wire [6:0]  row_group_offset = (text_row[4:3] == 2'd1) ? 7'd40 :
-                                   (text_row[4:3] == 2'd2) ? 7'd80 : 7'd0;
-    wire [9:0]  row_offset       = {text_row[2:0], 7'd0} + {3'd0, row_group_offset};
+    function [6:0] row_group_offset(input [4:0] r);
+        row_group_offset = (r[4:3] == 2'd1) ? 7'd40 :
+                           (r[4:3] == 2'd2) ? 7'd80 : 7'd0;
+    endfunction
+
+    wire [6:0]  rgo      = row_group_offset(text_row);
+    wire [9:0]  row_offset = {text_row[2:0], 7'd0} + {3'd0, rgo};
     wire        disp_page2       = page2 && !store80;
     wire [15:0] base_page        = disp_page2 ? 16'h0800 : 16'h0400;
     wire [15:0] text_addr        = base_page + {6'd0, row_offset} + {10'd0, fetch_col};
@@ -130,16 +134,16 @@ module video_generator (
     assign vram_addr             = (hires_mode && !is_text_line) ? hgr_addr : text_addr;
 
     assign aux_col = fetch_col;
-    wire [9:0]  a2_next = (v_cnt + 10'd1 - 10'd48) >> 1;
+    wire [9:0]  a2_next = (v_cnt + 10'd1 - A2_Y0) >> 1;
     wire [4:0]  trow_n  = a2_next[7:3];
-    wire [6:0]  rgo_n   = (trow_n[4:3] == 2'd1) ? 7'd40 : (trow_n[4:3] == 2'd2) ? 7'd80 : 7'd0;
+    wire [6:0]  rgo_n   = row_group_offset(trow_n);
     // The aux bytes of the next line: its hi-res line for double hi-res, else its text row.
     wire        text_n    = text_mode || (mixed_mode && (trow_n >= 5'd20));
     wire [9:0]  roff_n    = {trow_n[2:0], 7'd0} + {3'd0, rgo_n};
     assign aux_fill_addr  = (hires_mode && !text_n)
                           ? hgr_base + {3'd0, a2_next[2:0], 10'd0} + {6'd0, roff_n}
                           : base_page + {6'd0, roff_n};
-    assign aux_fill_start = col80 && (v_cnt >= 10'd47) && (v_cnt < 10'd431) && (h_cnt == 10'd660);
+    assign aux_fill_start = col80 && (v_cnt >= A2_Y0 - 10'd1) && (v_cnt < A2_Y1 - 10'd1) && (h_cnt == 10'd660);
 
     // Request RAM access during prefetch cycles only (1 cycle per character column + 1 cycle before col 0)
     assign vram_req = in_apple_y && slot_act && (eff_sub == req_sub);
