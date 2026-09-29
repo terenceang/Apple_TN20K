@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { KEYS, boardBox, CAPTION } from '../keyboard/layouts.js'
 import { hostKey, isModifier, REPEAT_DELAY_MS, REPEAT_INTERVAL_MS } from '../keymap.js'
 import { AppleGlyph } from './AppleGlyph.js'
-import type { Mode } from '../useApple'
+import type { Conn, Mode } from '../useApple'
 
 interface Props {
   mode: Mode
@@ -11,29 +11,91 @@ interface Props {
     mods: { shift: boolean; caps: boolean; ctrl: boolean },
     buttons: number,
   ) => void
+  /** RESET key down/up, with the paddle buttons (Open/Solid-Apple) held. */
+  onReset?: (down: boolean, buttons: number) => void
+  /** The last character key came up: the //e's any-key-down line drops. */
+  onRelease?: () => void
   /** Latching switches, so the caps can show as down. */
   held: { shift: boolean; ctrl: boolean; caps: boolean; appleO: boolean; appleC: boolean }
+  conn?: Conn
+  canSerial?: boolean
+  onConnect?: () => void
 }
 
-const UNIT = 34 // px per keycap unit
 type Cap = (typeof KEYS)[number]
 
 /**
  * The Apple //e keyboard, US layout, 1983-86 beige case with the large white
- * keycap print. 63 keys, arranged in layouts.js; this only draws it.
- *
- * Both ways of using it work at once: click a cap, or type on the real
- * keyboard, which is mapped by physical position so a Dvorak or AZERTY layout
- * still gets the //e's QWERTY one.
+ * keycap print. 63 keys, arranged in layouts.js; this draws the board and
+ * provides immediate visual connection feedback (Power LED, TX activity, and
+ * offline alerts).
  */
-export function Keyboard({ mode, onPress, held }: Props) {
+export function Keyboard({ mode, onPress, onReset, onRelease, held, conn, canSerial = true, onConnect }: Props) {
   const [down, setDown] = useState<Set<string>>(new Set())
+  // Character keys currently held, for the any-key-down release
+  const charsDown = useRef(new Set<string>())
+  const charUp = (id: string) => {
+    if (charsDown.current.delete(id) && charsDown.current.size === 0) onRelease?.()
+  }
   const delay = useRef<number | null>(null)
   const ticker = useRef<number | null>(null)
   const repeatId = useRef<string | null>(null)
-  // The real keyboard's modifier state, which the repeat timer has to read
-  // too, so a held Shift keeps shifting the repeats.
   const mods = useRef({ shift: false, ctrl: false })
+
+  const isConnected = conn?.state === 'open'
+  const isConnecting = conn?.state === 'opening' || conn?.state === 'probing'
+  const isWrongPort = conn?.state === 'wrong-port'
+
+  // Dynamic responsive unit scaling to fill the keyboard case
+  const bezelRef = useRef<HTMLDivElement>(null)
+  const [unit, setUnit] = useState(34)
+
+  useEffect(() => {
+    const el = bezelRef.current
+    if (!el) return
+
+    const update = () => {
+      const w = el.clientWidth
+      if (w > 0) {
+        // Total key units across is 17 (16.5 board width + 0.5 left margin)
+        // Bezel padding is 12px on each side (24px)
+        const available = w - 24
+        // Calculate unit to fill available width: minimum 34px, up to 70px
+        const computed = Math.min(70, Math.max(34, Math.floor(available / 17)))
+        setUnit(computed)
+      }
+    }
+
+    update()
+    const ro = new ResizeObserver(update)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
+
+  // Visual feedback when typing while disconnected, and TX activity pulse when connected
+  const [warnDisconnected, setWarnDisconnected] = useState(false)
+  const warnTimer = useRef<number | null>(null)
+  const [txPulse, setTxPulse] = useState(false)
+  const txTimer = useRef<number | null>(null)
+
+  const triggerActivity = () => {
+    if (!isConnected) {
+      setWarnDisconnected(true)
+      if (warnTimer.current) clearTimeout(warnTimer.current)
+      warnTimer.current = window.setTimeout(() => setWarnDisconnected(false), 3500)
+    } else {
+      setTxPulse(true)
+      if (txTimer.current) clearTimeout(txTimer.current)
+      txTimer.current = window.setTimeout(() => setTxPulse(false), 120)
+    }
+  }
+
+  // Ref mirror so event handlers don't stale
+  const heldRef = useRef(held)
+  heldRef.current = held
+
+  const isConnectedRef = useRef(isConnected)
+  isConnectedRef.current = isConnected
 
   useEffect(() => {
     const typingInto = (t: EventTarget | null) =>
@@ -47,8 +109,12 @@ export function Keyboard({ mode, onPress, held }: Props) {
       repeatId.current = null
     }
 
+    const heldButtons = () =>
+      (heldRef.current.appleO ? 0b001 : 0) | (heldRef.current.appleC ? 0b010 : 0)
+
     const press = (id: string) => {
-      const buttons = (heldRef.current.appleO ? 0b001 : 0) | (heldRef.current.appleC ? 0b010 : 0)
+      triggerActivity()
+      const buttons = heldButtons()
       onPress(id, { ...mods.current, caps: heldRef.current.caps }, buttons)
     }
 
@@ -69,7 +135,18 @@ export function Keyboard({ mode, onPress, held }: Props) {
       if (e.repeat) return // our own timer drives repeats, at the //e's rate
       mods.current = { shift: e.shiftKey, ctrl: e.ctrlKey }
       setDown((d) => new Set(d).add(id))
-      if (!isModifier(id) && e.code !== 'CapsLock') press(id)
+      // CONTROL-RESET: RESET does nothing on a //e unless CONTROL is down
+      if (id === 'reset') {
+        if (e.ctrlKey) {
+          triggerActivity()
+          onReset?.(true, heldButtons())
+        }
+        return
+      }
+      if (!isModifier(id) && e.code !== 'CapsLock') {
+        charsDown.current.add(id)
+        press(id)
+      }
 
       // Hold-to-repeat. The //e dropped REPT, so the hardware repeats instead,
       // after about a second and then at roughly 10 Hz.
@@ -82,6 +159,8 @@ export function Keyboard({ mode, onPress, held }: Props) {
 
     const onUp = (e: KeyboardEvent) => {
       const id = hostKey(e.code)
+      if (id === 'reset') onReset?.(false, heldButtons())
+      if (id) charUp(id)
       if (id) {
         setDown((d) => {
           if (!d.has(id)) return d
@@ -99,6 +178,11 @@ export function Keyboard({ mode, onPress, held }: Props) {
     const onBlur = () => {
       stopRepeat()
       setDown(new Set())
+      mods.current = { shift: false, ctrl: false }
+      if (charsDown.current.size) {
+        charsDown.current.clear()
+        onRelease?.()
+      }
     }
 
     window.addEventListener('keydown', onDown)
@@ -109,45 +193,122 @@ export function Keyboard({ mode, onPress, held }: Props) {
       window.removeEventListener('keydown', onDown)
       window.removeEventListener('keyup', onUp)
       window.removeEventListener('blur', onBlur)
+      if (warnTimer.current) clearTimeout(warnTimer.current)
+      if (txTimer.current) clearTimeout(txTimer.current)
     }
-    // `held` is read through a ref so the listeners are registered once.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [onPress])
+  }, [onPress, onReset, onRelease])
 
-  const heldRef = useRef(held)
-  heldRef.current = held
-
-  // --- clicking a cap -----------------------------------------------------
-  const capDown = (k: Cap, capEvent: 'down' | 'up' | 'enter') => {
-    if (isModifier(k.id)) return
-    const buttons = (held.appleO ? 0b001 : 0) | (held.appleC ? 0b010 : 0)
-    if (capEvent === 'enter') {
-      onPress(k.id, { shift: held.shift, caps: held.caps, ctrl: held.ctrl }, buttons)
+  const capDown = (k: Cap, capEvent: 'down' | 'up') => {
+    const buttons = (heldRef.current.appleO ? 0b001 : 0) | (heldRef.current.appleC ? 0b010 : 0)
+    if (k.id === 'reset') {
+      // CONTROL-RESET, from the on-screen cap: only with CONTROL held
+      if (capEvent === 'up') onReset?.(false, buttons)
+      else if (heldRef.current.ctrl) onReset?.(true, buttons)
+      setDown((d) => {
+        const n = new Set(d)
+        if (capEvent === 'down') n.add(k.id)
+        else n.delete(k.id)
+        return n
+      })
       return
     }
-    setDown((d) => {
-      const n = new Set(d)
-      if (capEvent === 'down') n.add(k.id)
-      else n.delete(k.id)
-      return n
-    })
+    if (capEvent === 'down') {
+      triggerActivity()
+      setDown((d) => new Set(d).add(k.id))
+      if (!isModifier(k.id)) charsDown.current.add(k.id)
+      onPress(k.id, { shift: heldRef.current.shift, caps: heldRef.current.caps, ctrl: heldRef.current.ctrl }, buttons)
+    } else {
+      charUp(k.id)
+      setDown((d) => {
+        const n = new Set(d)
+        n.delete(k.id)
+        return n
+      })
+    }
   }
 
   const legend = (k: Cap) => k.legend ?? ''
   /** The two apple keys, whose legend names the glyph rather than being text. */
   const isApple = (k: Cap) => legend(k) === 'open' || legend(k) === 'solid'
   const caption = (k: Cap) => CAPTION[k.id as keyof typeof CAPTION]
-  // Derived from the keys, not declared: the Reset tier is at y = -1, so the
-  // board has to be tall enough to hold it, and a key placed outside that would
-  // otherwise render on the beige case rather than in the dark key well.
   const board = boardBox()
 
   return (
-    <div className="keyboard-case">
-      <div className="keyboard-bezel">
+    <div className={'keyboard-case' + (!isConnected ? ' offline-case' : '')}>
+      <div className="keyboard-header">
+        <div className="keyboard-brand">
+          <span className="apple-badge">apple //e</span>
+          <div
+            className={`pwr-indicator ${
+              isConnected ? 'on' : isConnecting ? 'probing' : isWrongPort ? 'error' : 'off'
+            }`}
+            title={
+              isConnected
+                ? 'Tang Nano 20K connected (115200 8N1)'
+                : isConnecting
+                ? 'Connecting to Tang Nano 20K...'
+                : isWrongPort
+                ? 'Selected port did not respond (likely JTAG or unprogrammed board)'
+                : 'Not connected - click Connect USB to enable typing'
+            }
+          >
+            <span className={`pwr-led ${txPulse ? 'tx-active' : ''}`} />
+            <span className="pwr-text">
+              {isConnected
+                ? 'POWER'
+                : isConnecting
+                ? 'LINKING...'
+                : isWrongPort
+                ? 'WRONG PORT'
+                : 'OFFLINE'}
+            </span>
+            {isConnected && (
+              <span className={`tx-tag ${txPulse ? 'active' : ''}`} title="UART TX Activity">
+                TX
+              </span>
+            )}
+          </div>
+        </div>
+
+        <div className="keyboard-status-bar">
+          {!isConnected && (
+            <div className={`kb-notice ${warnDisconnected || isWrongPort ? 'alert' : ''}`}>
+              <span className="kb-notice-msg">
+                {isWrongPort
+                  ? '⚠️ Wrong USB Port! Selected port did not respond to Apple //e probe. Tang Nano 20K requires Channel B (UART). In Device Manager, enable "Load VCP" for Converter B.'
+                  : warnDisconnected
+                  ? '⚠️ Not connected! Keystrokes are not reaching the board.'
+                  : 'Hardware offline'}
+              </span>
+              {onConnect && (
+                <button
+                  type="button"
+                  className="kb-quick-connect"
+                  onClick={onConnect}
+                  disabled={!canSerial}
+                  title="Select Tang Nano 20K USB serial"
+                >
+                  ⚡ {isWrongPort ? 'Pick Port' : 'Connect USB'}
+                </button>
+              )}
+            </div>
+          )}
+          {isConnected && (
+            <span className="kb-connected-tag">
+              <span className="online-dot" /> Online • 115200 8N1
+            </span>
+          )}
+        </div>
+      </div>
+
+      <div className="keyboard-bezel" ref={bezelRef}>
         <div
-          className="board"
-          style={{ width: board.width * UNIT, height: board.height * UNIT - 3 }}
+          className={'board' + (!isConnected ? ' board-offline' : '')}
+          style={{
+            width: 17 * unit,
+            height: board.height * unit,
+            ['--unit' as string]: `${unit}px`,
+          }}
           role="group"
           aria-label="Apple //e keyboard"
         >
@@ -167,24 +328,18 @@ export function Keyboard({ mode, onPress, held }: Props) {
                   'cap' + (isDown ? ' down' : '') + (k.mod ? ' mod' : '') + (k.latch ? ' latch' : '')
                 }
                 style={{
-                  // 0.5u inset for the bezel edge; y is measured from the
-                  // Reset tier, which is a row above the keys
-                  left: (k.x + 0.5) * UNIT,
-                  top: (k.y - board.top) * UNIT,
-                  width: k.w ? k.w * UNIT - 3 : UNIT - 3,
-                  height: k.h ? k.h * UNIT - 3 : UNIT - 3,
+                  left: (k.x + 0.5) * unit,
+                  top: (k.y - board.top) * unit,
+                  width: k.w ? k.w * unit - 3 : unit - 3,
+                  height: k.h ? k.h * unit - 3 : unit - 3,
                 }}
                 onPointerDown={() => capDown(k, 'down')}
                 onPointerUp={() => capDown(k, 'up')}
                 onPointerLeave={() => capDown(k, 'up')}
-                onDoubleClick={() => capDown(k, 'enter')}
                 aria-label={k.id}
                 aria-pressed={isDown}
               >
                 {isApple(k) ? (
-                  // The apple keys are only ever the glyph -- their legend in
-                  // layouts.js is 'open' or 'solid' to say which, not text to
-                  // print.
                   <AppleGlyph solid={legend(k) === 'solid'} />
                 ) : (
                   <>
@@ -205,14 +360,29 @@ export function Keyboard({ mode, onPress, held }: Props) {
           })}
         </div>
       </div>
-      <p className="keyboard-note">
-        {mode === 'debugger' ? (
-          <>Debugger paused. Letters are commands; <kbd>Ctrl</kbd>+<kbd>B</kbd> resumes.</>
+
+      <p className={'keyboard-note' + (!isConnected ? ' offline-note' : '')}>
+        {!isConnected ? (
+          <>
+            <strong className="status-highlight offline">⚠️ OFFLINE:</strong> Not connected to the Tang Nano 20K.
+            Keystrokes will not reach the Apple //e until you{' '}
+            {onConnect && canSerial ? (
+              <button type="button" className="link-inline-btn" onClick={onConnect}>
+                connect USB
+              </button>
+            ) : (
+              'connect USB'
+            )}.
+          </>
+        ) : mode === 'debugger' ? (
+          <>
+            <strong className="status-highlight paused">⏸️ DEBUGGER:</strong> CPU is paused. Letters are commands;{' '}
+            <kbd>Ctrl</kbd>+<kbd>B</kbd> or <kbd>c</kbd> resumes.
+          </>
         ) : (
           <>
-            Click a cap, or just type. <kbd>Alt</kbd> is the apple key,{' '}
-            <kbd>Shift</kbd> and <kbd>Ctrl</kbd> are the //e's own, and holding a key repeats
-            after a second the way the hardware does.
+            <strong className="status-highlight online">🟢 READY:</strong> Connected to Apple //e. Click a cap, or just type. <kbd>Alt</kbd> is the apple key,{' '}
+            <kbd>Shift</kbd> and <kbd>Ctrl</kbd> are the //e's own, and holding a key repeats.
           </>
         )}
       </p>

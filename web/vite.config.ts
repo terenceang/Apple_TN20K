@@ -5,11 +5,6 @@ import { dirname, resolve } from 'node:path'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 
-// The bridge owns the serial port and, in production, serves dist/ itself so
-// the app and the WebSocket share an origin. In dev, Vite serves the app and
-// proxies /ws to the bridge instead.
-const BRIDGE = process.env.BRIDGE_URL ?? 'ws://127.0.0.1:8781'
-
 /**
  * A published build.
  *
@@ -44,10 +39,6 @@ export default defineConfig({
   },
   server: {
     port: 5273,
-    proxy: {
-      '/ws': { target: BRIDGE, ws: true },
-      '/api': { target: BRIDGE.replace(/^ws/, 'http') },
-    },
   },
   build: PAGES ? { outDir: 'dist', sourcemap: false } : { outDir: 'dist', sourcemap: true },
 })

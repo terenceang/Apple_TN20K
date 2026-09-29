@@ -180,10 +180,17 @@ export class SerialLink {
       let settled = false
       this.emit('probing')
 
+      const timer = setTimeout(() => finish('wrong-port'), PROBE_TIMEOUT_MS)
+      let probe2Timer = null
+      const cleanup = () => {
+        clearTimeout(timer)
+        if (probe2Timer) clearTimeout(probe2Timer)
+      }
+
       const finish = (result) => {
         if (settled) return
         settled = true
-        clearTimeout(timer)
+        cleanup()
         this.onBytes = previous
         this._verify = null
         if (result === 'ok') {
@@ -191,8 +198,11 @@ export class SerialLink {
           this.write(Uint8Array.from([CTRL_B]))
           this.emit('open')
         } else {
-          this.emit('wrong-port')
-          void this.close()
+          this.emit(
+            'wrong-port',
+            'Port did not respond to Apple //e probe. On Tang Nano 20K, Channel A is JTAG (COM38) and Channel B is UART. Enable "Load VCP" for Converter B in Device Manager.',
+          )
+          void this.close({ preserveState: true })
         }
         resolve(result)
       }
@@ -201,8 +211,15 @@ export class SerialLink {
         previous(bytes)
         if (hs.feed(bytes)) finish('ok')
       }
-      const timer = setTimeout(() => finish('wrong-port'), PROBE_TIMEOUT_MS)
+
+      // Send PROBE_BYTES (Ctrl+B and '?'). On real hardware the FPGA drops '?' while
+      // printing the initial banner, so re-send '?' after 250ms once banner finishes.
       this.write(PROBE_BYTES)
+      probe2Timer = setTimeout(() => {
+        if (!settled) {
+          this.write(Uint8Array.from([0x3f]))
+        }
+      }, 250)
     })
     return this._verify
   }
@@ -248,7 +265,8 @@ export class SerialLink {
     }
   }
 
-  async close() {
+  async close(opts = {}) {
+    const preserveState = Boolean(opts?.preserveState)
     this.closing = true
     this.queue = []
     if (this.reader) {
@@ -281,7 +299,9 @@ export class SerialLink {
     }
     this.port = null
     this.closing = false
-    if (this.state !== 'error') this.emit('idle')
+    if (!preserveState && this.state !== 'error' && this.state !== 'wrong-port') {
+      this.emit('idle')
+    }
   }
 }
 

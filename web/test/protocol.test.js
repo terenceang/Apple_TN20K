@@ -8,6 +8,7 @@ import assert from 'node:assert/strict'
 import {
   encodeKey,
   encodeGamepad,
+  encodeKeysUp,
   clampPaddle,
   parseHexChunk,
   BANNER,
@@ -32,6 +33,10 @@ test('the key packet masks its payload to 7 and 3 bits', () => {
   assert.deepEqual([...encodeKey(0xe1, 0xff)], [0xfe, 0x61, 0x07])
 })
 
+test('all-keys-up is FF 04', () => {
+  assert.deepEqual([...encodeKeysUp()], [0xff, 0x04])
+})
+
 test('a gamepad packet is FF 01 <buttons> <x> <y>', () => {
   assert.deepEqual([...encodeGamepad(0b011, 200, 0)], [0xff, 0x01, 0b011, 200, 0])
 })
@@ -48,14 +53,14 @@ test('the firmware strings match serial_debugger.v byte for byte', () => {
   assert.equal(RESUME, '\r\n[Resuming...]\r\n')
   assert.equal(HELP, '\r\nCmds: r=Regs s=Step c=Cont m=Mem t=Stat w=Scr h=Help\r\n> ')
   assert.equal(PROMPT, '\r\n> ')
-  // the handshake the bridge uses to tell the FPGA's UART from the BL616's
+  // the handshake serial-link uses to tell the FPGA's UART from the BL616's
   // own console
   assert.ok(HELP.includes(HANDSHAKE))
   assert.ok(!BANNER.includes(HANDSHAKE))
 })
 
 test('the handshake is a substring of the help line and nothing else', () => {
-  // The bridge tells the FPGA's UART from the BL616's own console by sending
+  // serial-link tells the FPGA's UART from the BL616's own console by sending
   // Ctrl+B, then '?', and looking for this. It must not appear in the banner
   // or the resume notice, or the probe would fire on the wrong port.
   assert.ok(HELP.includes(HANDSHAKE))

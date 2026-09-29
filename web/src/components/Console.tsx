@@ -3,6 +3,7 @@ import { useEffect, useRef } from 'react'
 interface Props {
   lines: string[]
   onClear: () => void
+  onClose?: () => void
 }
 
 /**
@@ -17,7 +18,7 @@ interface Props {
  * here mangled. That is a property of the hardware path, not of this pane --
  * the Screen pane is the way to see the real text page.
  */
-export function Console({ lines, onClear }: Props) {
+export function Console({ lines, onClear, onClose }: Props) {
   const box = useRef<HTMLPreElement>(null)
   const stick = useRef(true)
 
@@ -33,12 +34,18 @@ export function Console({ lines, onClear }: Props) {
         <h2>Console</h2>
         <span className="hint">COUT, $FDED</span>
         <button
+          type="button"
           onClick={onClear}
           onMouseEnter={() => (stick.current = false)}
           onMouseLeave={() => (stick.current = true)}
         >
           Clear
         </button>
+        {onClose && (
+          <button type="button" onClick={onClose} title="Hide Console">
+            Hide
+          </button>
+        )}
       </header>
       <pre
         ref={box}

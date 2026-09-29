@@ -9,19 +9,36 @@ interface Props {
   onCommand: (ch: string) => void
   onClearMem: () => void
   onToggle: () => void
+  onClose?: () => void
 }
 
 const hex = (n: number, w = 2) => '$' + n.toString(16).toUpperCase().padStart(w, '0')
 
 const FLAG_NAMES = ['N', 'V', '-', 'B', 'D', 'I', 'Z', 'C']
 
-export function DebuggerPane({ mode, regs, mem, status, onCommand, onClearMem, onToggle }: Props) {
+export function DebuggerPane({
+  mode,
+  regs,
+  mem,
+  status,
+  onCommand,
+  onClearMem,
+  onToggle,
+  onClose,
+}: Props) {
   return (
     <section className="pane debug-pane">
       <header>
         <h2>Debugger</h2>
         <span className="hint">Ctrl+B</span>
-        <button onClick={onToggle}>{mode === 'debugger' ? 'Resume' : 'Enter'}</button>
+        <button type="button" onClick={onToggle}>
+          {mode === 'debugger' ? 'Resume' : 'Enter'}
+        </button>
+        {onClose && (
+          <button type="button" onClick={onClose} title="Hide Debugger">
+            Hide
+          </button>
+        )}
       </header>
 
       <div className="debug-grid">

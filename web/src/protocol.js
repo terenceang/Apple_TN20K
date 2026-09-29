@@ -30,6 +30,23 @@ export function encodeKey(code, buttons = 0) {
   return Uint8Array.from([KEY_HDR, code & 0x7f, buttons & 0x07])
 }
 
+/**
+ * All keys up: FF 04. Drops any-key-down ($C010 bit 7), which a key packet
+ * holds until this arrives (a plain ASCII key has no release, so it times out).
+ */
+export function encodeKeysUp() {
+  return Uint8Array.from([GAMEPAD_HDR, 0x04])
+}
+
+/**
+ * The RESET key: FF 03 <b>, bit 3 = RESET held, bits 0-2 = the paddle buttons
+ * (the ROM reads Open/Solid-Apple just after RESET is released). A real //e's
+ * RESET only acts with CONTROL down; the caller enforces that.
+ */
+export function encodeReset(down, buttons = 0) {
+  return Uint8Array.from([GAMEPAD_HDR, 0x03, (down ? 0x08 : 0) | (buttons & 0x07)])
+}
+
 /** A gamepad packet: PB0/PB1/PB2 in the low three bits, then two paddles. */
 export function encodeGamepad(buttons, x, y) {
   return Uint8Array.from([

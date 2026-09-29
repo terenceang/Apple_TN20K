@@ -66,6 +66,13 @@ main {
   align-items: start;
 }
 
+main.no-left-col {
+  grid-template-columns: minmax(560px, 1fr);
+  max-width: 960px;
+  margin: 0 auto;
+  width: 100%;
+}
+
 @media (max-width: 1100px) {
   main {
     grid-template-columns: 1fr;
@@ -91,7 +98,7 @@ main {
 
 .pane > header {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 10px;
   margin-bottom: 8px;
   border-bottom: 1px solid #35322b;
@@ -201,45 +208,6 @@ kbd {
   color: var(--dim);
 }
 
-/* the bridge URL, editable, because the bridge does not have to be on the
-   same machine as the page */
-button.linkish {
-  background: none;
-  border: 1px solid transparent;
-  color: var(--dim);
-  font-family: var(--mono);
-  font-size: 11px;
-  padding: 2px 6px;
-  text-decoration: underline dotted;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  max-width: 34ch;
-}
-
-button.linkish:hover {
-  background: none;
-  color: var(--legend-dim);
-  border-color: #4a463d;
-}
-
-.endpoint {
-  display: flex;
-  gap: 5px;
-  align-items: center;
-}
-
-.endpoint input {
-  font-family: var(--mono);
-  font-size: 11px;
-  background: #17160f;
-  border: 1px solid #4a463d;
-  border-radius: 4px;
-  color: var(--ink);
-  padding: 3px 6px;
-  width: 30ch;
-}
-
 .dot {
   width: 8px;
   height: 8px;
@@ -257,17 +225,85 @@ button.linkish:hover {
 .dot.error {
   background: var(--err);
 }
-
-.job pre {
-  font-family: var(--mono);
-  font-size: 11px;
-  max-height: 140px;
-  overflow: auto;
-  background: #17160f;
-  padding: 6px;
-  border-radius: 4px;
-  margin: 6px 0 0;
+.dot.wrong-port {
+  background: var(--warn);
 }
+
+.btn-warn-action {
+  font-family: var(--sans);
+  font-size: 11px;
+  background: transparent;
+  border: 1px solid var(--warn);
+  color: var(--warn);
+  padding: 4px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.btn-warn-action:hover {
+  background: rgba(245, 158, 11, 0.15);
+  border-color: #fbbf24;
+}
+
+.view-toggles {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+button.toggle-btn {
+  font-family: var(--sans);
+  font-size: 11px;
+  background: #1c1a16;
+  border: 1px solid #3c382f;
+  color: var(--dim);
+  padding: 3px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+button.toggle-btn:hover {
+  color: var(--ink);
+  background: #2a2721;
+  border-color: #554f42;
+}
+
+button.btn-connect-primary {
+  background: linear-gradient(180deg, #b45309 0%, #92400e 100%);
+  border: 1px solid #d97706;
+  color: #fff;
+  font-family: var(--sans);
+  font-size: 11px;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4), 0 0 6px rgba(217, 119, 6, 0.3);
+  transition: all 0.15s ease;
+}
+
+button.btn-connect-primary:hover:not(:disabled) {
+  background: linear-gradient(180deg, #d97706 0%, #b45309 100%);
+  border-color: #f59e0b;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.5), 0 0 8px rgba(245, 158, 11, 0.5);
+  transform: translateY(-1px);
+}
+
+button.btn-connect-primary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+button.toggle-btn.active {
+  background: #383127;
+  border-color: var(--accent);
+  color: var(--ink);
+  font-weight: 500;
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.4);
+}
+
 
 /* --- console ------------------------------------------------------------- */
 
@@ -292,6 +328,171 @@ button.linkish:hover {
 }
 
 /* --- screen -------------------------------------------------------------- */
+
+.pane-close-btn {
+  background: transparent;
+  border: none;
+  color: var(--dim);
+  font-size: 16px;
+  line-height: 1;
+  padding: 0 4px;
+  cursor: pointer;
+  border-radius: 3px;
+  transition: color 0.15s ease, background 0.15s ease;
+}
+
+.pane-close-btn:hover {
+  color: var(--ink);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.btn-capture {
+  font-family: var(--sans);
+  font-size: 11px;
+  background: #24211c;
+  border: 1px solid #3c382f;
+  color: var(--ink);
+  padding: 3px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.btn-capture:hover:not(:disabled) {
+  border-color: var(--accent);
+  background: #2e2a22;
+}
+
+.btn-capture:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn-options-toggle {
+  font-family: var(--sans);
+  font-size: 11px;
+  background: #1c1a16;
+  border: 1px solid #3c382f;
+  color: var(--dim);
+  padding: 3px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.btn-options-toggle:hover,
+.btn-options-toggle.active {
+  color: var(--ink);
+  background: #2a2721;
+  border-color: var(--accent);
+}
+
+/* Options strip */
+.options-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  background: #181613;
+  border: 1px solid #2e2a22;
+  border-radius: 5px;
+  padding: 6px 10px;
+  margin-bottom: 10px;
+}
+
+.option-group {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.opt-label {
+  font-size: 10px;
+  color: var(--dim);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-right: 2px;
+  font-weight: 600;
+}
+
+button.opt-pill {
+  font-family: var(--sans);
+  font-size: 11px;
+  background: #24211c;
+  border: 1px solid #3c382f;
+  color: var(--dim);
+  padding: 2px 8px;
+  border-radius: 12px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  transition: all 0.15s ease;
+}
+
+button.opt-pill:hover {
+  color: var(--ink);
+  border-color: #554f42;
+  background: #2a2721;
+}
+
+button.opt-pill.selected {
+  background: #3c3327;
+  border-color: var(--accent);
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.color-swatch {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.opt-checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--dim);
+  cursor: pointer;
+  user-select: none;
+}
+
+.opt-checkbox-label:hover {
+  color: var(--ink);
+}
+
+.opt-checkbox-label input[type="checkbox"] {
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+/* CRT Scanlines */
+.screen-container {
+  position: relative;
+  width: 100%;
+  max-width: 560px;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.screen-container.with-scanlines::after {
+  content: " ";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: linear-gradient(
+    rgba(18, 16, 16, 0) 50%,
+    rgba(0, 0, 0, 0.35) 50%
+  );
+  background-size: 100% 4px;
+  pointer-events: none;
+  z-index: 2;
+}
 
 .screen {
   width: 100%;
@@ -408,6 +609,98 @@ button.linkish:hover {
 
 /* --- gamepad ------------------------------------------------------------- */
 
+.gamepad-options {
+  margin-bottom: 8px;
+}
+
+.gamepad-badge {
+  font-size: 11px;
+  color: var(--ok);
+  background: rgba(111, 191, 90, 0.12);
+  border: 1px solid rgba(111, 191, 90, 0.35);
+  padding: 2px 7px;
+  border-radius: 4px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-weight: 500;
+}
+
+.joystick-wrapper {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  margin: 10px 0 12px;
+  padding: 10px;
+  background: #191714;
+  border: 1px solid #2e2a22;
+  border-radius: 6px;
+}
+
+.joystick-pad {
+  position: relative;
+  width: 140px;
+  height: 140px;
+  background: #141210;
+  border: 2px solid #3c382f;
+  border-radius: 8px;
+  touch-action: none;
+  cursor: crosshair;
+  user-select: none;
+  box-shadow: inset 0 2px 6px rgba(0, 0, 0, 0.7);
+}
+
+.joystick-crosshair-h {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: rgba(255, 255, 255, 0.1);
+  pointer-events: none;
+}
+
+.joystick-crosshair-v {
+  position: absolute;
+  left: 50%;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: rgba(255, 255, 255, 0.1);
+  pointer-events: none;
+}
+
+.joystick-thumb {
+  position: absolute;
+  width: 22px;
+  height: 22px;
+  margin-left: -11px;
+  margin-top: -11px;
+  background: linear-gradient(135deg, #d97706 0%, #92400e 100%);
+  border: 2px solid #fbbf24;
+  border-radius: 50%;
+  pointer-events: none;
+  box-shadow: 0 0 10px rgba(245, 158, 11, 0.6), 0 2px 4px rgba(0, 0, 0, 0.5);
+  transition: transform 0.05s ease-out;
+}
+
+.joystick-readout {
+  display: flex;
+  gap: 16px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--legend-dim);
+}
+
+.joystick-readout strong {
+  color: var(--ink);
+}
+
+.paddles-sliders {
+  margin-top: 8px;
+}
+
 .gamepad-buttons {
   display: flex;
   gap: 8px;
@@ -435,7 +728,7 @@ button.linkish:hover {
 }
 
 .paddle span {
-  width: 60px;
+  width: 80px;
   color: var(--dim);
 }
 
@@ -456,25 +749,271 @@ button.linkish:hover {
 .keyboard-case {
   background: linear-gradient(180deg, var(--case) 0%, var(--case-dark) 100%);
   border-radius: 10px;
-  padding: 16px 16px 10px;
+  padding: 12px 16px 12px;
   box-shadow:
     inset 0 1px 0 #e6e0cd,
     inset 0 -2px 6px var(--case-shadow),
     0 3px 10px rgba(0, 0, 0, 0.5);
   overflow-x: auto;
+  border: 1px solid transparent;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.keyboard-case.offline-case {
+  border-color: rgba(217, 119, 6, 0.25);
+}
+
+.keyboard-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+  padding: 0 4px;
+}
+
+.keyboard-brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.apple-badge {
+  font-family: Garamond, "Apple Garamond", "Times New Roman", serif;
+  font-style: italic;
+  font-weight: 700;
+  font-size: 15px;
+  color: #5a4f40;
+  letter-spacing: -0.02em;
+  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.6);
+  user-select: none;
+}
+
+/* Authentic Power / Status indicator badge */
+.pwr-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: #2a231c;
+  padding: 3px 8px;
+  border-radius: 4px;
+  border: 1px solid #1a1510;
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.6);
+  font-family: var(--sans);
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  font-weight: 700;
+  user-select: none;
+}
+
+.pwr-led {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  display: inline-block;
+  transition: all 0.1s ease;
+}
+
+.pwr-indicator.on .pwr-led {
+  background: #10b981;
+  box-shadow: 0 0 6px #10b981, inset 0 1px 1px rgba(255, 255, 255, 0.9);
+}
+
+.pwr-indicator.on .pwr-led.tx-active {
+  background: #a7f3d0;
+  box-shadow: 0 0 10px #34d399, 0 0 3px #fff;
+  transform: scale(1.2);
+}
+
+.pwr-indicator.on .pwr-text {
+  color: #34d399;
+}
+
+.tx-tag {
+  font-size: 8px;
+  color: #065f46;
+  background: #064e3b;
+  padding: 1px 3px;
+  border-radius: 2px;
+  opacity: 0.4;
+  transition: all 0.08s ease;
+}
+
+.tx-tag.active {
+  opacity: 1;
+  background: #10b981;
+  color: #022c22;
+  font-weight: 800;
+}
+
+.pwr-indicator.probing .pwr-led {
+  background: #f59e0b;
+  box-shadow: 0 0 6px #f59e0b;
+  animation: probe-pulse 1s infinite alternate;
+}
+
+.pwr-indicator.probing .pwr-text {
+  color: #fbbf24;
+}
+
+@keyframes probe-pulse {
+  from { opacity: 0.4; }
+  to { opacity: 1; }
+}
+
+.pwr-indicator.off .pwr-led {
+  background: #4a4036;
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.8);
+}
+
+.pwr-indicator.off .pwr-text {
+  color: #8c8273;
+}
+
+.pwr-indicator.error .pwr-led {
+  background: #ef4444;
+  box-shadow: 0 0 6px rgba(239, 68, 68, 0.8);
+}
+
+.pwr-indicator.error .pwr-text {
+  color: #f87171;
+}
+
+.keyboard-status-bar {
+  display: flex;
+  align-items: center;
+}
+
+.kb-notice {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(42, 35, 28, 0.8);
+  border: 1px solid #4a3e30;
+  padding: 2px 8px;
+  border-radius: 4px;
+  transition: all 0.2s ease;
+}
+
+.kb-notice.alert {
+  background: rgba(180, 83, 9, 0.35);
+  border-color: #f59e0b;
+  box-shadow: 0 0 8px rgba(245, 158, 11, 0.5);
+  animation: kb-shake 0.3s ease;
+}
+
+@keyframes kb-shake {
+  0%, 100% { transform: translateX(0); }
+  25% { transform: translateX(-3px); }
+  75% { transform: translateX(3px); }
+}
+
+.kb-notice-msg {
+  font-family: var(--sans);
+  font-size: 11px;
+  color: #d1b490;
+}
+
+.kb-notice.alert .kb-notice-msg {
+  color: #fbbf24;
+  font-weight: 600;
+}
+
+.kb-quick-connect {
+  background: linear-gradient(180deg, #b45309 0%, #92400e 100%);
+  border: 1px solid #d97706;
+  color: #fff;
+  font-family: var(--sans);
+  font-size: 10px;
+  font-weight: 700;
+  padding: 3px 8px;
+  border-radius: 3px;
+  cursor: pointer;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+  transition: all 0.15s ease;
+}
+
+.kb-quick-connect:hover:not(:disabled) {
+  background: linear-gradient(180deg, #d97706 0%, #b45309 100%);
+  border-color: #f59e0b;
+  box-shadow: 0 0 6px rgba(245, 158, 11, 0.6);
+}
+
+.kb-connected-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-family: var(--sans);
+  font-size: 11px;
+  font-weight: 600;
+  color: #34d399;
+}
+
+.online-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #10b981;
+  box-shadow: 0 0 4px #10b981;
+}
+
+.status-highlight {
+  font-weight: 700;
+  padding: 1px 4px;
+  border-radius: 3px;
+  display: inline-block;
+  margin-right: 4px;
+}
+
+.status-highlight.offline {
+  background: rgba(239, 68, 68, 0.15);
+  color: #f87171;
+  border: 1px solid rgba(239, 68, 68, 0.3);
+}
+
+.status-highlight.online {
+  background: rgba(16, 185, 129, 0.15);
+  color: #34d399;
+  border: 1px solid rgba(16, 185, 129, 0.3);
+}
+
+.status-highlight.paused {
+  background: rgba(245, 158, 11, 0.15);
+  color: #fbbf24;
+  border: 1px solid rgba(245, 158, 11, 0.3);
+}
+
+.link-inline-btn {
+  background: none;
+  border: none;
+  color: #f59e0b;
+  text-decoration: underline;
+  cursor: pointer;
+  padding: 0;
+  font: inherit;
+  font-weight: 600;
+}
+
+.link-inline-btn:hover {
+  color: #fbbf24;
 }
 
 .keyboard-bezel {
   /* the recessed key well, the darker field the brown caps sit in */
   background: #2a231c;
-  border-radius: 6px;
-  padding: 8px;
-  box-shadow: inset 0 2px 5px rgba(0, 0, 0, 0.7);
-  display: inline-block;
+  border-radius: 8px;
+  padding: 10px 12px;
+  box-shadow: inset 0 2px 6px rgba(0, 0, 0, 0.75), 0 1px 0 rgba(255, 255, 255, 0.15);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  width: 100%;
+  overflow-x: auto;
 }
 
 .board {
   position: relative;
+  margin: 0 auto;
+  --unit: 34px;
 }
 
 .cap {
@@ -486,10 +1025,10 @@ button.linkish:hover {
   gap: 0;
   background: linear-gradient(180deg, var(--cap-2) 0%, var(--cap) 55%, var(--cap-edge) 100%);
   border: 1px solid var(--cap-edge);
-  border-radius: 4px 4px 3px 3px;
+  border-radius: calc(var(--unit, 34px) * 0.1);
   color: var(--legend);
   font-family: var(--sans);
-  font-size: 11px;
+  font-size: calc(var(--unit, 34px) * 0.32);
   line-height: 1.05;
   padding: 0;
   cursor: pointer;
@@ -519,28 +1058,28 @@ button.linkish:hover {
 
 /* CAPS LOCK latches, so it looks like a switch rather than a key you hold */
 .cap.latch {
-  border-radius: 3px;
+  border-radius: calc(var(--unit, 34px) * 0.09);
   box-shadow:
     inset 0 0 0 1px rgba(0, 0, 0, 0.5),
     0 2px 0 var(--cap-edge);
 }
 
 .cap-top {
-  font-size: 13px;
+  font-size: calc(var(--unit, 34px) * 0.38);
   color: var(--legend);
 }
 
 .cap-bottom {
-  font-size: 11px;
+  font-size: calc(var(--unit, 34px) * 0.32);
   color: var(--legend-dim);
 }
 
 .cap-main {
-  font-size: 12px;
+  font-size: calc(var(--unit, 34px) * 0.36);
 }
 
 .cap-word {
-  font-size: 8px;
+  font-size: calc(var(--unit, 34px) * 0.25);
   letter-spacing: 0.06em;
   color: var(--legend);
   text-transform: uppercase;
@@ -549,7 +1088,7 @@ button.linkish:hover {
 /* the apple keys: the glyph is the whole legend, drawn as SVG */
 .cap[aria-label='apple-o'],
 .cap[aria-label='apple-c'] {
-  font-size: 18px;
+  font-size: calc(var(--unit, 34px) * 0.52);
 }
 
 .cap[aria-label='reset'] {

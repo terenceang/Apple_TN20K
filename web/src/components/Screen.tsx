@@ -1,7 +1,16 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, useCallback } from 'react'
 import { AppleStream, screenToText } from '../stream.js'
 import { dotRow, HAS_GLYPHS, GLYPH_W, GLYPH_H } from '../charset.js'
-import { LORES_PALETTE, PHOSPHOR_ON, PHOSPHOR_OFF, SCR_COLS, SCR_GFX_ROWS } from '../protocol.js'
+import { LORES_PALETTE, SCR_COLS, SCR_GFX_ROWS } from '../protocol.js'
+import {
+  PREF_SCREEN_PALETTE,
+  PREF_SCREEN_SCANLINES,
+  PREF_SCREEN_AUTOREFRESH,
+  getSavedString,
+  setSavedString,
+  getSavedBool,
+  setSavedBool,
+} from '../prefs.js'
 import type { Screen as ScreenFrame } from '../useApple'
 
 const SCALE = 2 // the Apple II raster is 560x384; double it
@@ -12,10 +21,34 @@ const LORES_BLOCK_W = 14 // a lo-res block is one 14-pixel character cell wide
 
 const rgb = (c: number[]) => `rgb(${c[0]},${c[1]},${c[2]})`
 
+export type PhosphorTheme = 'green' | 'amber' | 'white'
+
+const PALETTES: Record<PhosphorTheme, { on: number[]; off: number[]; label: string; dot: string }> = {
+  green: {
+    on: [0x20, 0xe8, 0x20],
+    off: [0x02, 0x06, 0x02],
+    label: 'Green',
+    dot: '#20e820',
+  },
+  amber: {
+    on: [0xff, 0xb0, 0x00],
+    off: [0x14, 0x0a, 0x00],
+    label: 'Amber',
+    dot: '#ffb000',
+  },
+  white: {
+    on: [0xee, 0xee, 0xee],
+    off: [0x08, 0x08, 0x08],
+    label: 'B&W',
+    dot: '#eeeeee',
+  },
+}
+
 interface Props {
   screen: ScreenFrame | null
   onCapture: () => void
   busy: boolean
+  onClose?: () => void
 }
 
 /**
@@ -27,9 +60,61 @@ interface Props {
  * expression video_generator.v uses, so this is the same picture the monitor
  * over HDMI is showing.
  */
-export function Screen({ screen, onCapture, busy }: Props) {
+export function Screen({ screen, onCapture, busy, onClose }: Props) {
   const canvas = useRef<HTMLCanvasElement>(null)
   const [flash, setFlash] = useState(false)
+
+  const store = typeof localStorage !== 'undefined' ? localStorage : null
+
+  // Persistent Display Options
+  const [palette, setPaletteState] = useState<PhosphorTheme>(() => {
+    const saved = getSavedString(store, PREF_SCREEN_PALETTE, 'green')
+    return saved === 'amber' || saved === 'white' ? saved : 'green'
+  })
+  const [scanlines, setScanlinesState] = useState(() =>
+    getSavedBool(store, PREF_SCREEN_SCANLINES, false),
+  )
+  const [autoRefresh, setAutoRefreshState] = useState<number>(() => {
+    const v = Number(getSavedString(store, PREF_SCREEN_AUTOREFRESH, '0'))
+    return isNaN(v) ? 0 : v
+  })
+  const [showOptions, setShowOptions] = useState(false)
+
+  const setPalette = useCallback(
+    (p: PhosphorTheme) => {
+      setPaletteState(p)
+      setSavedString(store, PREF_SCREEN_PALETTE, p)
+    },
+    [store],
+  )
+
+  const setScanlines = useCallback(
+    (s: boolean | ((prev: boolean) => boolean)) => {
+      setScanlinesState((prev) => {
+        const next = typeof s === 'function' ? s(prev) : s
+        setSavedBool(store, PREF_SCREEN_SCANLINES, next)
+        return next
+      })
+    },
+    [store],
+  )
+
+  const setAutoRefresh = useCallback(
+    (sec: number) => {
+      setAutoRefreshState(sec)
+      setSavedString(store, PREF_SCREEN_AUTOREFRESH, String(sec))
+    },
+    [store],
+  )
+
+  // Auto-refresh timer
+  useEffect(() => {
+    if (autoRefresh <= 0) return
+    const interval = setInterval(() => {
+      if (!busy) onCapture()
+    }, autoRefresh * 1000)
+    return () => clearInterval(interval)
+  }, [autoRefresh, busy, onCapture])
 
   useEffect(() => {
     const t = setInterval(() => setFlash((f) => !f), FLASH_MS)
@@ -41,6 +126,8 @@ export function Screen({ screen, onCapture, busy }: Props) {
     [screen],
   )
   const text = useMemo(() => (screen ? screenToText(screen.page) : []), [screen])
+
+  const curPal = PALETTES[palette] || PALETTES.green
 
   useEffect(() => {
     const cv = canvas.current
@@ -68,8 +155,8 @@ export function Screen({ screen, onCapture, busy }: Props) {
         // Inverse video swaps the lit and unlit colours, and the //e draws
         // flashing characters by toggling that bit, so it drives both.
         const inverse = cell.inverse !== flash
-        const on = rgb(inverse ? PHOSPHOR_OFF : PHOSPHOR_ON)
-        const off = rgb(inverse ? PHOSPHOR_ON : PHOSPHOR_OFF)
+        const on = rgb(inverse ? curPal.off : curPal.on)
+        const off = rgb(inverse ? curPal.on : curPal.off)
         for (let r = 0; r < GLYPH_H; r++) {
           const bits = dotRow(cell.code, r, flash ? 1 : 0)
           const y = (row * GLYPH_H + r) * SCALE
@@ -81,27 +168,104 @@ export function Screen({ screen, onCapture, busy }: Props) {
         }
       }
     }
-  }, [screen, cells, flash])
+  }, [screen, cells, flash, curPal])
 
   return (
     <section className="pane screen-pane">
       <header>
         <h2>Screen</h2>
         <span className="hint">40 &times; 24, the text page</span>
-        <button onClick={onCapture} disabled={busy}>
+        <span className="spacer" />
+        <button
+          type="button"
+          className="btn-capture"
+          onClick={onCapture}
+          disabled={busy}
+          title="Pause Apple //e momentarily, read text framebuffer, and resume"
+        >
           {busy ? 'Capturing...' : 'Freeze & capture'}
         </button>
+        <button
+          type="button"
+          className={'btn-options-toggle' + (showOptions ? ' active' : '')}
+          onClick={() => setShowOptions((o) => !o)}
+          title="Toggle display options (Phosphor color, CRT scanlines, Auto-refresh)"
+          aria-pressed={showOptions}
+        >
+          ⚙ Options
+        </button>
+        {onClose && (
+          <button
+            type="button"
+            className="pane-close-btn"
+            onClick={onClose}
+            title="Hide screen pane"
+            aria-label="Close screen"
+          >
+            &times;
+          </button>
+        )}
       </header>
 
-      {HAS_GLYPHS ? (
-        <canvas ref={canvas} className="screen" />
-      ) : (
-        <p className="warn">
-          No character ROM, so this is showing text rather than pixels. Run{' '}
-          <code>npm run charset</code> in <code>web/</code> after supplying{' '}
-          <code>roms/apple2e_char.hex</code> to draw the real //e glyphs.
-        </p>
+      {showOptions && (
+        <div className="options-strip screen-options" role="region" aria-label="Screen Options">
+          <div className="option-group">
+            <span className="opt-label">Phosphor:</span>
+            {(['green', 'amber', 'white'] as PhosphorTheme[]).map((p) => (
+              <button
+                key={p}
+                type="button"
+                className={'opt-pill' + (palette === p ? ' selected' : '')}
+                onClick={() => setPalette(p)}
+              >
+                <span className="color-swatch" style={{ background: PALETTES[p].dot }} />
+                {PALETTES[p].label}
+              </button>
+            ))}
+          </div>
+
+          <div className="option-group">
+            <label className="opt-checkbox-label">
+              <input
+                type="checkbox"
+                checked={scanlines}
+                onChange={(e) => setScanlines(e.target.checked)}
+              />
+              CRT Scanlines
+            </label>
+          </div>
+
+          <div className="option-group">
+            <span className="opt-label">Auto-Poll:</span>
+            {[
+              { sec: 0, label: 'Off' },
+              { sec: 2, label: '2s' },
+              { sec: 5, label: '5s' },
+            ].map((opt) => (
+              <button
+                key={opt.sec}
+                type="button"
+                className={'opt-pill' + (autoRefresh === opt.sec ? ' selected' : '')}
+                onClick={() => setAutoRefresh(opt.sec)}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+        </div>
       )}
+
+      <div className={'screen-container' + (scanlines ? ' with-scanlines' : '')}>
+        {HAS_GLYPHS ? (
+          <canvas ref={canvas} className="screen" />
+        ) : (
+          <p className="warn">
+            No character ROM, so this is showing text rather than pixels. Run{' '}
+            <code>npm run charset</code> in <code>web/</code> after supplying{' '}
+            <code>roms/apple2e_char.hex</code> to draw the real //e glyphs.
+          </p>
+        )}
+      </div>
 
       {screen ? (
         <>

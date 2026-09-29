@@ -137,12 +137,13 @@ module video_generator (
     // Each of the 7 character dots spans 2 pixel clocks:
     // sub_col: 0..1 (dot 0), 2..3 (dot 1), ..., 12..13 (dot 6)
     wire [2:0] dot_index = sub_col[3:1]; // 0..6
-    // A 1 in the character ROM is a lit dot, and dot_index 0 is the leftmost.
-    // (The 2732 stores glyphs that way: byte offset code*8 + row, top row
-    // first, bit 0 leftmost. The ROM bytes are used as they are -- the
-    // screen-scraping UI in web/ reads the same file and reproduces this
-    // address expression, so the two cannot drift apart.)
-    wire pixel_on = glyph_byte[dot_index];
+    // The 2732 is active-low: a 0 is a lit dot. Normal glyphs (the 0x400 and
+    // 0x600 halves, what the CPU writes as $80-$FF) are stored as e.g. 0xE3 for
+    // the top row of '@'; the inverse half (0x000, codes $00-$3F) is stored the
+    // other way round so the same inversion draws it dark on light.
+    // dot_index 0 is the leftmost dot, bit 0 of the byte.
+    // web/src/charset.js reproduces this, so the browser and HDMI agree.
+    wire pixel_on = ~glyph_byte[dot_index];
 
     // Lo-Res graphics support:
     wire is_text_line = text_mode || (mixed_mode && (text_row >= 5'd20));

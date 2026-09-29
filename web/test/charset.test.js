@@ -9,11 +9,13 @@
 //  video_generator.v:
 //      char_rom_addr = {1'b0, code[7]|(code[6]&flash), code[6]&code[7],
 //                       code[5:0], row}
-//      pixel_on      = glyph_byte[dot]      // 1 = lit
+//      pixel_on      = ~glyph_byte[dot]     // the 2732 is active-low
 //
 //  so a glyph lives at (code & 0x3F) * 8 + row, bit 0 is the leftmost dot, and
-//  a set bit is a lit dot. Under that, 0x41 ('A') reads glyph 1, 0x20 (space)
-//  reads glyph 0x20 which is all zeroes, and 0x00 reads glyph 0 which is '@'.
+//  a CLEAR bit is a lit dot. What the CPU stores for normal text is $80-$FF:
+//  $C1 ('A') reads the 0x600 half, glyph 1, stored as e.g. 0xF7 for the top row;
+//  $A0 (space) is all ones. Codes $00-$3F read the 0x000 half, which is stored
+//  the other way round so the same inversion draws them dark on light.
 // ============================================================================
 
 import test from 'node:test'
@@ -47,16 +49,16 @@ test('the character ROM was built', { skip: !available }, () => {
   assert.ok(HAS_GLYPHS, 'run `npm run charset` in web/ to build src/generated/charset.json')
 })
 
-test('a set bit is a lit dot, and bit 0 is the leftmost one', { skip: !available }, () => {
-  // Space is stored as eight zero bytes, so under the right-hand reading it
-  // is blank and under an inverted one it is a solid block.
-  assert.deepEqual(picture(0x20), Array(8).fill('.......'))
+test('a clear bit is a lit dot, and bit 0 is the leftmost one', { skip: !available }, () => {
+  // Normal space ($A0) is stored as eight 0xFF bytes, so it is blank; read the
+  // other way it would be a solid green block.
+  assert.deepEqual(picture(0xa0), Array(8).fill('.......'))
 })
 
 test('A reads the glyph at code & 0x3F', { skip: !available }, () => {
-  // 0x41 & 0x3F == 0x01, and glyph 1 is a capital A. If the addressing used
+  // 0xC1 & 0x3F == 0x01, and glyph 1 is a capital A. If the addressing used
   // the whole code, or the polarity were inverted, this would not be an A.
-  const a = picture(0x41)
+  const a = picture(0xc1)
   assert.deepEqual(a, [
     '...#...',
     '..#.#..',
@@ -68,16 +70,19 @@ test('A reads the glyph at code & 0x3F', { skip: !available }, () => {
     '.......',
   ])
   // and the lowercase 'a' is a different glyph at 0x61 & 0x3F == 0x21
-  assert.notDeepEqual(picture(0x61), a)
+  assert.notDeepEqual(picture(0xe1), a)
+  // $01 is the INVERSE 'A': the same shape, every dot swapped
+  const inv = picture(0x01)
+  assert.deepEqual(inv, a.map((r) => [...r].map((c) => (c === '#' ? '.' : '#')).join('')).map((r) => r.slice(0, 7)))
 })
 
 test('@ and 0 are at their own glyphs', { skip: !available }, () => {
-  // 0x00 -> glyph 0, which is '@'
-  assert.deepEqual(picture(0x00)[0], '..###..')
-  assert.deepEqual(picture(0x00)[1], '.#...#.')
-  // 0x30 -> glyph 0x10, the digit 0, which on the Apple II carries the slash
+  // 0xC0 -> glyph 0, which is '@'
+  assert.deepEqual(picture(0xc0)[0], '..###..')
+  assert.deepEqual(picture(0xc0)[1], '.#...#.')
+  // 0xB0 -> the digit 0, which on the Apple II carries the slash
   // that tells it apart from a capital O
-  assert.deepEqual(picture(0x30), [
+  assert.deepEqual(picture(0xb0), [
     '..###..',
     '.#...#.',
     '.#..##.',
@@ -97,11 +102,10 @@ test('the glyph width is 7 dots and the height 8 lines', { skip: !available }, (
 
 test('the flash clock only moves a flashing character to the alternate set',
   { skip: !available }, () => {
-    const normal = picture(0x41)
-    // 0xC1 has bits 7 and 6 set: inverse plus flash, which the //e draws by
-    // swapping the character set rather than by inverting the dots.
-    const inverse = picture(0xc1)
-    assert.notDeepEqual(inverse, normal)
+    // $41 flashes: the inverse half while the clock is low, normal when high
+    const normal = picture(0xc1)
+    assert.deepEqual(picture(0x41, 1), normal)
+    assert.notDeepEqual(picture(0x41, 0), normal)
   })
 
 test('a cell code that is not printable is drawn blank, not as a control char',

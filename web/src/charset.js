@@ -9,10 +9,10 @@
 //                        char_code[5:0],
 //                        glyph_row[2:0] }
 //
-//  and lights a dot where the ROM bit is set:
+//  and lights a dot where the ROM bit is clear (the 2732 is active-low):
 //
 //      dot_index = sub_col[3:1]          // 0..6, left to right
-//      pixel_on  = glyph_byte[dot_index]
+//      pixel_on  = ~glyph_byte[dot_index]
 //
 //  So the character code is NOT plain ASCII as far as the video path is
 //  concerned: bits 7 and 6 pick the alternate set, and only bits 5..0 pick a
@@ -55,9 +55,10 @@ export function romByte(code, row, flash) {
 
 /**
  * The 7-bit dot mask for one scanline of a cell, leftmost dot in bit 0, a set
- * bit meaning the dot is lit. Rows run top to bottom and bit 0 is the
- * leftmost dot, which is how the 2732 stores them.
+ * bit meaning the dot is lit. The 2732 is active-low (a 0 is a lit dot), so
+ * this is the complement of the ROM byte, exactly as the RTL's `~glyph_byte`.
+ * Rows run top to bottom and bit 0 is the leftmost dot.
  */
 export function dotRow(code, row, flash) {
-  return romByte(code, row, flash) & 0x7f
+  return ~romByte(code, row, flash) & 0x7f
 }

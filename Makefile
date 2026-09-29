@@ -19,7 +19,6 @@
 
 BUILD = scripts/build.sh
 PROG  = scripts/prog.sh
-BRIDGE = scripts/bridge.sh
 
 all: pack
 
@@ -68,8 +67,5 @@ web-test:
 web-charset:
 	cd web && npm run charset
 
-bridge:
-	$(BRIDGE)
-
 .PHONY: all synth pnr pack flash flash-sram clean \
-        web-install web-build web-dev web-test web-charset bridge
+        web-install web-build web-dev web-test web-charset

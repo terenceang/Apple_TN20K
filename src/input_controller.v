@@ -7,6 +7,12 @@
 //   0xFE <code> <buttons>    one keypress: <code> is the final 7-bit Apple II
 //                            key code, <buttons> bit0/1/2 = PB0/PB1/PB2
 //   0xFF 0x01 <b> <x> <y>    gamepad: buttons, paddle 0, paddle 1
+//   0xFF 0x04                all keys up: clears any-key-down (AKD, $C010 bit 7).
+//                            A plain ASCII key has no release event, so its AKD
+//                            drops on its own after ~100 ms
+//   0xFF 0x03 <b>            RESET key: b bit3 = RESET held, bits 0-2 = PB0-2
+//                            (sent only with CONTROL down: the //e's RESET line
+//                            is CONTROL-gated, and the host owns modifiers)
 //   0x1B '[' A|B|C|D         cursor keys, mapped to 0x0B/0x0A/0x15/0x08
 //   anything else            a single ASCII keystroke
 //
@@ -37,7 +43,8 @@ module input_controller (
     output wire        io_hit,        // Address recognized
 
     // Diagnostic indicator
-    output wire        key_strobe
+    output wire        key_strobe,
+    output wire        kbd_reset      // RESET key held
 );
 
     // 115200 baud receiver at 27 MHz:
@@ -125,6 +132,7 @@ module input_controller (
     reg       pb0 = 1'b0;       // Pushbutton 0 ($C061 - Open Apple)
     reg       pb1 = 1'b0;       // Pushbutton 1 ($C062 - Solid Apple)
     reg       pb2 = 1'b0;       // Pushbutton 2 ($C063)
+    reg       key_reset = 1'b0; // RESET key held
     reg [7:0] joy_pdl0 = 8'd128; // Analog paddle 0 (default center)
     reg [7:0] joy_pdl1 = 8'd128; // Analog paddle 1 (default center)
 
@@ -139,8 +147,9 @@ module input_controller (
         end else begin
             // Trigger countdown on $C070-$C07F read
             if (io_read && (io_addr[7:4] == 4'h7)) begin
-                pdl0_cnt <= {joy_pdl0, 4'b0000};
-                pdl1_cnt <= {joy_pdl1, 4'b0000};
+                // ~11 us (11 CPU cycles, one PREAD loop) per count, 0..2805
+                pdl0_cnt <= {4'b0, joy_pdl0} * 12'd11;
+                pdl1_cnt <= {4'b0, joy_pdl1} * 12'd11;
             end else if (ce_1m) begin
                 if (pdl0_cnt > 12'd0) pdl0_cnt <= pdl0_cnt - 1'b1;
                 if (pdl1_cnt > 12'd0) pdl1_cnt <= pdl1_cnt - 1'b1;
@@ -163,22 +172,72 @@ module input_controller (
     localparam PKT_GP_Y   = 4'd6;
     localparam PKT_KEY_CODE= 4'd8;
     localparam PKT_KEY_BTN= 4'd9;
+    localparam PKT_RST_BTN= 4'd10;
 
     reg [3:0] pkt_state = PKT_NORMAL;
+
+    // The key that follows a lone ESC, held until the CPU has read the ESC
+    reg       pend_valid = 1'b0;
+    reg [6:0] pend_key   = 7'd0;
+    // A lone ESC (no '[' after it) is delivered after ~39 ms of silence
+    reg [19:0] esc_cnt   = 20'd0;
+
+    // Any-key-down for $C010 bit 7. FE packets hold it until FF 04 (all keys
+    // up); a plain ASCII sender has no release event, so it drops after ~100 ms.
+    reg        akd        = 1'b0;
+    reg        akd_legacy = 1'b0;
+    reg [21:0] akd_cnt    = 22'd0;
+    localparam [21:0] AKD_LEGACY_CLKS = 22'd2700000;
+
+    // CR/LF are Return, DEL is backspace
+    wire [6:0] norm_key = (urx_byte == 8'h0A || urx_byte == 8'h0D) ? 7'h0D :
+                          (urx_byte == 8'h7F || urx_byte == 8'h08) ? 7'h08 :
+                          urx_byte[6:0];
 
     always @(posedge clk or posedge reset) begin
         if (reset) begin
             kbd_data  <= 8'h00;
             pkt_state <= PKT_NORMAL;
+            pend_valid <= 1'b0;
+            esc_cnt    <= 20'd0;
+            akd        <= 1'b0;
+            akd_legacy <= 1'b0;
+            akd_cnt    <= 22'd0;
             pb0       <= 1'b0;
             pb1       <= 1'b0;
             pb2       <= 1'b0;
+            key_reset <= 1'b0;
             joy_pdl0  <= 8'd128;
             joy_pdl1  <= 8'd128;
         end else begin
             // Clear keyboard strobe on $C010 access
             if ((io_read || io_write) && (io_addr == 8'h10)) begin
                 kbd_data[7] <= 1'b0;
+            end
+
+            // Deliver the key that followed a lone ESC once the ESC is read
+            if (pend_valid && !kbd_data[7]) begin
+                kbd_data   <= {1'b1, pend_key};
+                pend_valid <= 1'b0;
+            end
+
+            // Lone ESC: nothing followed it, so it is the ESC key
+            if (pkt_state == PKT_ESC && !urx_valid) begin
+                esc_cnt <= esc_cnt + 1'b1;
+                if (&esc_cnt) begin
+                    kbd_data   <= {1'b1, 7'h1B};
+                    akd        <= 1'b1;
+                    akd_legacy <= 1'b1;
+                    akd_cnt    <= AKD_LEGACY_CLKS;
+                    pkt_state  <= PKT_NORMAL;
+                end
+            end else begin
+                esc_cnt <= 20'd0;
+            end
+
+            if (akd && akd_legacy) begin
+                if (akd_cnt == 22'd0) akd <= 1'b0;
+                else                  akd_cnt <= akd_cnt - 1'b1;
             end
 
             if (urx_valid && !dbg_mode && (urx_byte != 8'h02)) begin
@@ -192,15 +251,11 @@ module input_controller (
                         end else if (urx_byte == 8'h1B) begin // ESC
                             pkt_state <= PKT_ESC;
                         end else begin
-                            // Standard keystroke:
-                            // Normalize CR/LF to Apple II Return (0x0D)
-                            // Normalize 0x7F (DEL) to Backspace (0x08)
-                            if (urx_byte == 8'h0A || urx_byte == 8'h0D)
-                                kbd_data <= {1'b1, 7'h0D}; // Return with strobe
-                            else if (urx_byte == 8'h7F || urx_byte == 8'h08)
-                                kbd_data <= {1'b1, 7'h08}; // Left arrow / backspace
-                            else
-                                kbd_data <= {1'b1, urx_byte[6:0]}; // ASCII with strobe
+                            // Standard keystroke, with strobe
+                            kbd_data   <= {1'b1, norm_key};
+                            akd        <= 1'b1;
+                            akd_legacy <= 1'b1;
+                            akd_cnt    <= AKD_LEGACY_CLKS;
                         end
                     end
 
@@ -208,8 +263,19 @@ module input_controller (
                         if (urx_byte == 8'h5B) // '['
                             pkt_state <= PKT_BRACKET;
                         else begin
-                            kbd_data  <= {1'b1, 7'h1B}; // Raw ESC key
-                            pkt_state <= PKT_NORMAL;
+                            kbd_data   <= {1'b1, 7'h1B}; // Raw ESC key
+                            akd        <= 1'b1;
+                            akd_legacy <= 1'b1;
+                            akd_cnt    <= AKD_LEGACY_CLKS;
+                            // ...and the byte that followed it is not lost
+                            if (urx_byte == 8'hFF)      pkt_state <= PKT_GP_HDR;
+                            else if (urx_byte == 8'hFE) pkt_state <= PKT_KEY_CODE;
+                            else if (urx_byte == 8'h1B) pkt_state <= PKT_ESC;
+                            else begin
+                                pend_valid <= 1'b1;
+                                pend_key   <= norm_key;
+                                pkt_state  <= PKT_NORMAL;
+                            end
                         end
                     end
 
@@ -221,14 +287,23 @@ module input_controller (
                             8'h44: kbd_data <= {1'b1, 7'h08}; // Left Arrow (Ctrl-H / 0x08)
                             default: ;
                         endcase
+                        if (urx_byte >= 8'h41 && urx_byte <= 8'h44) begin
+                            akd        <= 1'b1;
+                            akd_legacy <= 1'b1;
+                            akd_cnt    <= AKD_LEGACY_CLKS;
+                        end
                         pkt_state <= PKT_NORMAL;
                     end
 
                     PKT_GP_HDR: begin
                         if (urx_byte == 8'h01)
                             pkt_state <= PKT_GP_BTN;
-                        else
+                        else if (urx_byte == 8'h03)
+                            pkt_state <= PKT_RST_BTN;
+                        else begin
+                            if (urx_byte == 8'h04) akd <= 1'b0; // all keys up
                             pkt_state <= PKT_NORMAL;
+                        end
                     end
 
                     PKT_GP_BTN: begin
@@ -256,14 +331,24 @@ module input_controller (
                     // 0/1/2 are PB0/PB1/PB2, so the Open-Apple and Solid-Apple
                     // keys drive the game paddles the way they do in hardware.
                     PKT_KEY_CODE: begin
-                        kbd_data  <= {1'b1, urx_byte[6:0]};
-                        pkt_state <= PKT_KEY_BTN;
+                        kbd_data   <= {1'b1, urx_byte[6:0]};
+                        akd        <= 1'b1;
+                        akd_legacy <= 1'b0; // held until FF 04
+                        pkt_state  <= PKT_KEY_BTN;
                     end
 
                     PKT_KEY_BTN: begin
                         pb0 <= urx_byte[0];
                         pb1 <= urx_byte[1];
                         pb2 <= urx_byte[2];
+                        pkt_state <= PKT_NORMAL;
+                    end
+
+                    PKT_RST_BTN: begin
+                        pb0       <= urx_byte[0];
+                        pb1       <= urx_byte[1];
+                        pb2       <= urx_byte[2];
+                        key_reset <= urx_byte[3];
                         pkt_state <= PKT_NORMAL;
                     end
 
@@ -274,6 +359,7 @@ module input_controller (
     end
 
     assign key_strobe = kbd_data[7];
+    assign kbd_reset  = key_reset;
     assign rx_byte    = urx_byte;
     assign rx_valid   = urx_valid;
 
@@ -302,7 +388,10 @@ module input_controller (
 
     always @(*) begin
         case (io_addr[7:4])
-            4'h0, 4'h1: io_dout = kbd_data;                 // $C000-$C01F
+            4'h0:       io_dout = kbd_data;                 // $C000-$C00F
+            4'h1:       io_dout = (io_addr[3:0] == 4'h0) ?
+                                  {akd, kbd_data[6:0]} :    // $C010: AKD + key
+                                  kbd_data;                 // $C011-$C01F: low 7 bits used
             4'h6:       io_dout = {in_bit, 7'h00};          // $C060-$C06F
             default:    io_dout = 8'h00;                    // $C070-$C07F & others
         endcase

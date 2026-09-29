@@ -26,3 +26,8 @@ obj_dir/
 /web/dist/
 # Built from roms/apple2e_char.hex, which is Apple copyright, same as above
 /web/src/generated/charset.json
+
+# Dev screenshots (they render the Apple character set)
+/web/*.png
+# Third-party vendor PDFs (datasheet, schematic) are not ours to redistribute
+/Documents/*.pdf

@@ -122,6 +122,7 @@ module top (
     wire [7:0] input_dout;
     wire       input_hit;
     wire       key_strobe;
+    wire       kbd_reset;
 
     input_controller u_input (
         .clk(clk_pixel),
@@ -136,7 +137,8 @@ module top (
         .io_write(io_write),
         .io_dout(input_dout),
         .io_hit(input_hit),
-        .key_strobe(key_strobe)
+        .key_strobe(key_strobe),
+        .kbd_reset(kbd_reset)
     );
 
     // Apple //e Core (CPU, Memory, Softswitches)
@@ -149,7 +151,7 @@ module top (
 
     apple2_core u_core (
         .clk(clk_pixel),
-        .reset(sys_reset | cpu_reset_req),
+        .reset(sys_reset | cpu_reset_req | kbd_reset),
         .ce_1m(ce_1m),
         .input_dout(input_dout),
         .input_hit(input_hit),

@@ -43,6 +43,7 @@ module tb_input;
     wire [7:0] io_dout;
     wire       io_hit;
     wire       key_strobe;
+    wire       kbd_reset;
 
     wire [7:0] rx_byte;
     wire       rx_valid;
@@ -60,7 +61,8 @@ module tb_input;
         .io_write  (io_write),
         .io_dout   (io_dout),
         .io_hit    (io_hit),
-        .key_strobe(key_strobe)
+        .key_strobe(key_strobe),
+        .kbd_reset (kbd_reset)
     );
 
     integer failures = 0;
@@ -199,6 +201,20 @@ module tb_input;
         eq8(io_dout, 8'h80, "key packet PB0 reaches $C061 bit 7");
         clear_strobe;
 
+        // $C010 bit 7 is any-key-down, not the strobe: still set after the
+        // strobe was cleared, low 7 bits are the key, held until FF 04
+        reg_read(8'h10);
+        eq8(io_dout, 8'hC1, "AKD stays set while the FE key is held");
+        reg_read(8'h1F);
+        eq8(io_dout[6:0], 7'h41, "$C01x reads carry the key in bits 6:0");
+        repeat (300000) @(posedge clk);
+        reg_read(8'h10);
+        eq8(io_dout, 8'hC1, "an FE key's AKD does not time out");
+        send_byte(8'hFF); send_byte(8'h04);
+        repeat (SETTLE) @(posedge clk);
+        reg_read(8'h10);
+        eq8(io_dout, 8'h41, "FF 04 drops AKD");
+
         // The apple keys are level state: a keypress with no buttons held must
         // clear them again.
         send_byte(8'hFE);
@@ -232,6 +248,22 @@ module tb_input;
         reg_read(8'h00);
         eq8(io_dout, 8'hFE, "FE 7E 00 types '~'");
         clear_strobe;
+
+        // RESET key: FF 03 <b>, bit3 = held, buttons ride along, no keystroke
+        clear_strobe;
+        ok(kbd_reset === 1'b0, "RESET idle after power-on");
+        send_byte(8'hFF); send_byte(8'h03); send_byte(8'h09);   // RESET + PB0
+        repeat (SETTLE) @(posedge clk);
+        ok(kbd_reset === 1'b1, "FF 03 09 holds RESET");
+        reg_read(8'h61);
+        eq8(io_dout, 8'h80, "RESET packet carries Open-Apple (PB0)");
+        reg_read(8'h00);
+        ok(io_dout[7] === 1'b0, "RESET packet types nothing");
+        send_byte(8'hFF); send_byte(8'h03); send_byte(8'h01);   // release, PB0 still down
+        repeat (SETTLE) @(posedge clk);
+        ok(kbd_reset === 1'b0, "FF 03 01 releases RESET");
+        send_byte(8'hFF); send_byte(8'h03); send_byte(8'h00);
+        repeat (SETTLE) @(posedge clk);
 
         // ------------------------------------------------------------------
         // 3. Cursor keys
@@ -268,12 +300,23 @@ module tb_input;
         eq8(io_dout, 8'h88, "ESC [ D is left arrow $08");
         clear_strobe;
 
-        // A bare ESC is still a keystroke
+        // A bare ESC is still a keystroke, and the key after it is not lost
         send_byte(8'h1B);
         send_byte(8'h78);                        // ESC then 'x', not a bracket
         repeat (SETTLE) @(posedge clk);
         reg_read(8'h00);
         eq8(io_dout, 8'h9B, "ESC not followed by [ is the ESC key");
+        clear_strobe;
+        repeat (SETTLE) @(posedge clk);
+        reg_read(8'h00);
+        eq8(io_dout, 8'hF8, "the key after ESC arrives once ESC is read");
+        clear_strobe;
+
+        // A lone ESC (nothing after it) is delivered after a pause
+        send_byte(8'h1B);
+        repeat (1100000) @(posedge clk);
+        reg_read(8'h00);
+        eq8(io_dout, 8'h9B, "a lone ESC times out into the ESC key");
         clear_strobe;
 
         // ------------------------------------------------------------------
@@ -306,6 +349,16 @@ module tb_input;
         repeat (16) @(posedge clk);
         reg_read(8'h64);
         ok(io_dout[7] === 1'b1, "paddle 0 still times out before 60us");
+        // 200 * 11 counts (ce_1m is high every clock here): still running at
+        // 2100, done by 2300. The old 200 * 16 = 3200 would fail the second.
+        repeat (2100) @(posedge clk);
+        reg_read(8'h64);
+        ok(io_dout[7] === 1'b1, "paddle 0 (200) is still counting at 2100");
+        repeat (200) @(posedge clk);
+        reg_read(8'h64);
+        ok(io_dout[7] === 1'b0, "paddle 0 (200) is done by 2300: 11 per count");
+        reg_read(8'h65);
+        ok(io_dout[7] === 1'b0, "paddle 1 (0) reads 0 at once");
 
         // ------------------------------------------------------------------
         // 5. Ctrl+B belongs to the debugger, never the keyboard
@@ -316,6 +369,16 @@ module tb_input;
         reg_read(8'h00);
         ok(io_dout[7] === 1'b0, "0x02 does not become a keystroke");
         ok(rx_valid === 1'b0 || rx_byte == 8'h02, "0x02 is still passed to the debugger");
+
+        // A plain ASCII key has no release event: AKD drops by itself
+        send_byte(8'h41);
+        repeat (SETTLE) @(posedge clk);
+        reg_read(8'h10);
+        ok(io_dout[7] === 1'b1, "legacy ASCII key sets AKD");
+        repeat (2800000) @(posedge clk);
+        reg_read(8'h10);
+        ok(io_dout[7] === 1'b0, "legacy ASCII AKD times out");
+        clear_strobe;
 
         // ------------------------------------------------------------------
         // 6. Address decode

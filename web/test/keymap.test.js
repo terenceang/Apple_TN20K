@@ -11,7 +11,18 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 
 import { KEYS, boardBox, keysOutsideBoard } from '../src/keyboard/layouts.js'
-import { resolve, isModifier, buttonFor, repertoire, keyIds, PADDLE_BUTTONS } from '../src/keymap.js'
+import {
+  resolve,
+  isModifier,
+  buttonFor,
+  repertoire,
+  keyIds,
+  PADDLE_BUTTONS,
+  hostKey,
+  hostCodeFor,
+  REPEAT_DELAY_MS,
+  REPEAT_INTERVAL_MS,
+} from '../src/keymap.js'
 
 test('no keycap legend depends on an emoji font', () => {
   // The two apple keys were the 1F34F/1F34E emoji and rendered as blank boxes
@@ -220,4 +231,52 @@ test('the repertoire is 95 printable + $01-$1B + DEL', () => {
   const r = repertoire()
   assert.equal(new Set(r).size, r.length, 'no duplicates')
   assert.equal(r.length, 95 + 27 + 1)
+})
+
+test('hostKey maps physical host KeyboardEvent.code positions to Apple //e keys', () => {
+  // Letters
+  assert.equal(hostKey('KeyA'), 'a')
+  assert.equal(hostKey('KeyQ'), 'q')
+  assert.equal(hostKey('KeyZ'), 'z')
+  // Numbers & Symbols
+  assert.equal(hostKey('Digit1'), '1')
+  assert.equal(hostKey('Digit0'), '0')
+  assert.equal(hostKey('Minus'), 'minus')
+  assert.equal(hostKey('Equal'), 'equals')
+  assert.equal(hostKey('Backquote'), 'tilde')
+  // Control & Nav
+  assert.equal(hostKey('Escape'), 'esc')
+  assert.equal(hostKey('Enter'), 'return')
+  assert.equal(hostKey('Backspace'), 'delete')
+  assert.equal(hostKey('Delete'), 'delete')
+  assert.equal(hostKey('ArrowLeft'), 'left')
+  assert.equal(hostKey('ArrowRight'), 'right')
+  assert.equal(hostKey('ArrowUp'), 'up')
+  assert.equal(hostKey('ArrowDown'), 'down')
+  // Modifiers: Alt maps to the two apple keys
+  assert.equal(hostKey('AltLeft'), 'apple-o')
+  assert.equal(hostKey('AltRight'), 'apple-c')
+  assert.equal(hostKey('ShiftLeft'), 'shift-l')
+  assert.equal(hostKey('ShiftRight'), 'shift-r')
+  assert.equal(hostKey('ControlLeft'), 'control')
+  assert.equal(hostKey('ControlRight'), 'control')
+  assert.equal(hostKey('CapsLock'), 'caps')
+  // Unmapped keys return null
+  assert.equal(hostKey('F1'), null)
+  assert.equal(hostKey('F12'), null)
+  assert.equal(hostKey('Insert'), null)
+  assert.equal(hostKey('UnknownKey'), null)
+})
+
+test('hostCodeFor provides reverse lookup from Apple //e key to host code', () => {
+  assert.equal(hostCodeFor('a'), 'KeyA')
+  assert.equal(hostCodeFor('esc'), 'Escape')
+  assert.equal(hostCodeFor('apple-o'), 'AltLeft')
+  assert.equal(hostCodeFor('apple-c'), 'AltRight')
+  assert.equal(hostCodeFor('not-a-key'), null)
+})
+
+test('auto-repeat runs at ~10 Hz with an initial delay of ~1 second', () => {
+  assert.equal(REPEAT_DELAY_MS, 1000)
+  assert.equal(REPEAT_INTERVAL_MS, 100)
 })

@@ -159,6 +159,7 @@ keystroke, so a Bluetooth-to-UART module or `picocom` still works.
 | `02` | toggle the hardware debugger. The firmware throws this away before the keyboard sees it, so Ctrl+B can never type a character |
 | `FE <code> <btns>` | one keypress: the final 7-bit key code, and the paddle button bits (bit 0 Open-Apple, bit 1 Solid-Apple) down with it |
 | `FF 01 <btns> <x> <y>` | gamepad: buttons, paddle 0, paddle 1 |
+| `FF 04` | all keys up: drops any-key-down (`$C010` bit 7) |
 | `1B 5B 41/42/43/44` | ANSI cursor keys, mapped to `$0B/$0A/$15/$08` |
 | anything else | a single ASCII keystroke, with CR/LF and DEL normalised |
 

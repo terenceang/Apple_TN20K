@@ -1,24 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AppleStream } from './stream.js'
-import { encodeGamepad, encodeKey } from './protocol.js'
-import { defaultEndpoint, forget, remember, resolveEndpoint } from './endpoint.js'
+import { encodeGamepad, encodeKey, encodeKeysUp, encodeReset } from './protocol.js'
 import { SerialLink, serialSupported, BAUD } from './serial-link.js'
-import { WsLink } from './ws-link.js'
 import { isLetter, resolve } from './keymap.js'
-
-/** localStorage, or something harmless if there is none. */
-function storage(): Storage | null {
-  try {
-    return typeof localStorage === 'undefined' ? null : localStorage
-  } catch {
-    return null // blocked, e.g. private mode
-  }
-}
-
-/** Always a URL: if nothing was saved or asked for, the page's own address. */
-function endpointFor(here: Location | null): string {
-  return resolveEndpoint(here, storage()) ?? defaultEndpoint(here)
-}
 
 export type ConnState =
   | 'idle'
@@ -29,7 +13,7 @@ export type ConnState =
   | 'wrong-port'
   | 'error'
 
-export type Transport = 'serial' | 'bridge'
+export type Transport = 'serial'
 
 export interface Conn {
   state: ConnState
@@ -39,13 +23,20 @@ export interface Conn {
   error: string | null
 }
 
-export interface Job {
-  state: 'running' | 'done' | 'failed'
-  target: string
-  lines: string[]
-  started: number
-  finished?: number
-  error?: string | null
+export interface SerialState {
+  kind: 'serial'
+  state: ConnState
+  detail: string | null
+}
+
+export interface Link {
+  kind: 'serial'
+  onBytes: (b: Uint8Array) => void
+  onState?: (s: SerialState) => void
+  write: (b: Uint8Array | number[]) => void
+  describe: () => string
+  open: (opts?: { verify?: boolean }) => Promise<string>
+  close: (opts?: { preserveState?: boolean }) => Promise<void>
 }
 
 /** The events stream.js emits, mirroring the wire the firmware sends. */
@@ -126,19 +117,6 @@ const CAPTURE_TIMEOUT_MS = 4000
 
 const IDLE: Conn = { state: 'idle', detail: null, transport: null, error: null }
 
-/** Anything both transports provide. */
-interface Link {
-  kind: Transport
-  onBytes: (b: Uint8Array) => void
-  onState?: (s: { kind: Transport; state: ConnState; detail: string | null }) => void
-  onJob?: (j: Job) => void
-  write: (b: Uint8Array | number[]) => void
-  describe: () => string
-  open: () => Promise<string>
-  close: () => Promise<void>
-  control?: (m: object) => void
-}
-
 export function useApple() {
   const link = useRef<Link | null>(null)
   const stream = useRef(new AppleStream())
@@ -154,18 +132,9 @@ export function useApple() {
   const [mem, setMem] = useState<MemLine[]>([])
   const [status, setStatus] = useState<Status | null>(null)
   const [screen, setScreen] = useState<Screen | null>(null)
-  const [job, setJob] = useState<Job | null>(null)
   const [bells, setBells] = useState(0)
   const [busy, setBusy] = useState(false)
   const [canSerial, setCanSerial] = useState(false)
-
-  // Where the bridge is, for the fallback transport. It is state, not a
-  // constant, so a bundle served from somewhere else -- a GitHub Pages site,
-  // say -- can be pointed at the bridge on the machine the board is plugged
-  // into. See endpoint.js.
-  const [endpoint, setEndpointState] = useState<string>(() =>
-    endpointFor(typeof location === 'undefined' ? null : location),
-  )
 
   useEffect(() => setCanSerial(serialSupported()), [])
 
@@ -265,14 +234,13 @@ export function useApple() {
       void link.current?.close()
       link.current = l
       l.onBytes = onBytes
-      l.onState = (s) =>
+      l.onState = (s: SerialState) =>
         setConn({
           state: s.state,
           detail: s.detail,
-          transport: s.kind,
+          transport: 'serial',
           error: s.state === 'error' ? s.detail : null,
         })
-      l.onJob = setJob
     },
     [onBytes],
   )
@@ -281,46 +249,24 @@ export function useApple() {
    * Plug the board straight into this browser. Must come from a click, because
    * Web Serial's device picker only opens from a user gesture.
    */
-  const connectSerial = useCallback(async () => {
-    const l = new SerialLink()
-    attach(l)
-    setConn({ state: 'opening', detail: null, transport: 'serial', error: null })
-    await l.open()
-  }, [attach])
-
-  /** The bridge, for a board on another machine, or a browser without Web Serial. */
-  const connectBridge = useCallback(
-    async (url?: string) => {
-      const target = url ?? endpoint
-      if (url) {
-        const n = remember(storage(), url)
-        if (n) setEndpointState(n)
-      }
-      const l = new WsLink(target)
+  const connectSerial = useCallback(
+    async (opts?: { verify?: boolean }) => {
+      const l = new SerialLink() as unknown as Link
       attach(l)
-      setConn({ state: 'opening', detail: null, transport: 'bridge', error: null })
-      await l.open()
+      setConn({ state: 'opening', detail: null, transport: 'serial', error: null })
+      await l.open(opts)
     },
-    [attach, endpoint],
+    [attach],
   )
+
+  const connectWithoutVerify = useCallback(async () => {
+    await connectSerial({ verify: false })
+  }, [connectSerial])
 
   const disconnect = useCallback(async () => {
     await link.current?.close()
     link.current = null
     setConn(IDLE)
-  }, [])
-
-  const setEndpoint = useCallback(
-    (value: string) => {
-      const next = remember(storage(), value)
-      if (next) setEndpointState(next)
-    },
-    [],
-  )
-
-  const resetEndpoint = useCallback(() => {
-    forget(storage())
-    setEndpointState(endpointFor(typeof location === 'undefined' ? null : location))
   }, [])
 
   const send = useCallback((bytes: number[] | Uint8Array) => link.current?.write(bytes), [])
@@ -339,6 +285,22 @@ export function useApple() {
     },
     [mode, send, release],
   )
+
+  /** The RESET key. The //e's RESET line is CONTROL-gated, so only a press made
+   *  with CONTROL down asserts it; a release is always sent. */
+  const resetKey = useCallback(
+    (down: boolean, buttons: number) => {
+      if (mode === 'debugger') return
+      send(encodeReset(down, buttons))
+    },
+    [mode, send],
+  )
+
+  /** All character keys are up: drops the //e's any-key-down line ($C010 bit 7). */
+  const releaseKeys = useCallback(() => {
+    if (mode === 'debugger') return
+    send(encodeKeysUp())
+  }, [mode, send])
 
   const toggleDebugger = useCallback(() => send([0x02]), [send])
 
@@ -364,16 +326,9 @@ export function useApple() {
     [send],
   )
 
-  // Programming needs a subprocess, so it is the one thing only the bridge can do.
-  const flash = useCallback((toFlash: boolean) => {
-    link.current?.control?.({ t: 'flash', flash: toFlash })
-  }, [])
-
-  /** Retry whichever transport was in use, rather than always the bridge. */
   const reconnect = useCallback(() => {
-    if (link.current?.kind === 'serial') void connectSerial()
-    else void connectBridge()
-  }, [connectSerial, connectBridge])
+    void connectSerial()
+  }, [connectSerial])
 
   const clearConsole = useCallback(() => setLines([]), [])
   const clearMem = useCallback(() => setMem([]), [])
@@ -383,11 +338,8 @@ export function useApple() {
       conn,
       canSerial,
       baud: BAUD,
-      endpoint,
-      setEndpoint,
-      resetEndpoint,
       connectSerial,
-      connectBridge,
+      connectWithoutVerify,
       disconnect,
       mode,
       lines,
@@ -395,15 +347,15 @@ export function useApple() {
       mem,
       status,
       screen,
-      job,
       bells,
       busy,
       pressKey,
+      resetKey,
+      releaseKeys,
       toggleDebugger,
       captureScreen,
       setPaddles,
       send,
-      flash,
       reconnect,
       clearConsole,
       clearMem,
@@ -411,11 +363,8 @@ export function useApple() {
     [
       conn,
       canSerial,
-      endpoint,
-      setEndpoint,
-      resetEndpoint,
       connectSerial,
-      connectBridge,
+      connectWithoutVerify,
       disconnect,
       mode,
       lines,
@@ -423,15 +372,15 @@ export function useApple() {
       mem,
       status,
       screen,
-      job,
       bells,
       busy,
       pressKey,
+      resetKey,
+      releaseKeys,
       toggleDebugger,
       captureScreen,
       setPaddles,
       send,
-      flash,
       reconnect,
       clearConsole,
       clearMem,

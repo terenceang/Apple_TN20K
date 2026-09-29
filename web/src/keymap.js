@@ -189,6 +189,8 @@ export const HOST_MAP = {
   ControlLeft: 'control',
   ControlRight: 'control',
   CapsLock: 'caps',
+  // RESET is recessed above the keys on a //e; End is the nearest host key.
+  End: 'reset',
   // Alt stands in for the apple keys, which are modifiers on a real //e.
   AltLeft: 'apple-o',
   AltRight: 'apple-c',

@@ -7,27 +7,76 @@ import { DebuggerPane } from './components/DebuggerPane'
 import { Gamepad } from './components/Gamepad'
 import { FlashBar } from './components/FlashBar'
 
+import {
+  PREF_CONSOLE,
+  PREF_DEBUGGER,
+  PREF_SCREEN,
+  PREF_PADDLES,
+  getSavedBool,
+  setSavedBool,
+} from './prefs.js'
+
 export default function App() {
   const apple = useApple()
   const [held, setHeld] = useState({ shift: false, ctrl: false, caps: false, appleO: false, appleC: false })
   const [buttons, setButtons] = useState(0)
   const [paddles, setPaddles] = useState({ x: 128, y: 128 })
 
-  // Ctrl+B is the debugger toggle, and the firmware throws 0x02 away before the
-  // keyboard ever sees it, so it is handled here rather than in the keymap.
+  const store = typeof localStorage !== 'undefined' ? localStorage : null
+
+  // View Visibility Toggles (Screen and Paddles are visible by default; Console and Debugger hidden)
+  const [showScreen, setShowScreenState] = useState(() => getSavedBool(store, PREF_SCREEN, true))
+  const [showConsole, setShowConsoleState] = useState(() => getSavedBool(store, PREF_CONSOLE, false))
+  const [showDebugger, setShowDebuggerState] = useState(() => getSavedBool(store, PREF_DEBUGGER, false))
+  const [showPaddles, setShowPaddlesState] = useState(() => getSavedBool(store, PREF_PADDLES, true))
+
+  const setShowScreen = useCallback((show: boolean | ((prev: boolean) => boolean)) => {
+    setShowScreenState((prev) => {
+      const next = typeof show === 'function' ? show(prev) : show
+      setSavedBool(store, PREF_SCREEN, next)
+      return next
+    })
+  }, [store])
+
+  const setShowConsole = useCallback((show: boolean | ((prev: boolean) => boolean)) => {
+    setShowConsoleState((prev) => {
+      const next = typeof show === 'function' ? show(prev) : show
+      setSavedBool(store, PREF_CONSOLE, next)
+      return next
+    })
+  }, [store])
+
+  const setShowDebugger = useCallback((show: boolean | ((prev: boolean) => boolean)) => {
+    setShowDebuggerState((prev) => {
+      const next = typeof show === 'function' ? show(prev) : show
+      setSavedBool(store, PREF_DEBUGGER, next)
+      return next
+    })
+  }, [store])
+
+  const setShowPaddles = useCallback((show: boolean | ((prev: boolean) => boolean)) => {
+    setShowPaddlesState((prev) => {
+      const next = typeof show === 'function' ? show(prev) : show
+      setSavedBool(store, PREF_PADDLES, next)
+      return next
+    })
+  }, [store])
+
+  // Ctrl+B is the debugger toggle. Automatically reveal the debugger pane when engaged.
   useEffect(() => {
     const h = (e: KeyboardEvent) => {
       if (e.ctrlKey && !e.shiftKey && !e.altKey && e.code === 'KeyB') {
         e.preventDefault()
         apple.toggleDebugger()
+        setShowDebugger(true)
       }
       setHeld((s) => ({
         ...s,
         shift: e.shiftKey,
         ctrl: e.ctrlKey,
         caps: s.caps,
-        appleO: e.altKey && e.code === 'AltLeft',
-        appleC: e.altKey && e.code === 'AltRight',
+        appleO: e.code === 'AltLeft' ? true : (s.appleO && e.altKey),
+        appleC: e.code === 'AltRight' ? true : (s.appleC && e.altKey),
       }))
       if (e.code === 'CapsLock') setHeld((s) => ({ ...s, caps: !s.caps }))
     }
@@ -44,7 +93,7 @@ export default function App() {
       window.removeEventListener('keydown', h)
       window.removeEventListener('keyup', up)
     }
-  }, [apple])
+  }, [apple, setShowDebugger])
 
   const press = useCallback(
     (id: string, mods: { shift: boolean; caps: boolean; ctrl: boolean }, btns: number) => {
@@ -67,40 +116,81 @@ export default function App() {
     [apple],
   )
 
+  const hasLeftCol = showConsole || showScreen
+
   return (
     <div className="app">
       <FlashBar
         conn={apple.conn}
         canSerial={apple.canSerial}
         baud={apple.baud}
-        job={apple.job}
-        endpoint={apple.endpoint}
+        showScreen={showScreen}
+        showConsole={showConsole}
+        showDebugger={showDebugger}
+        showPaddles={showPaddles}
+        onToggleScreen={() => setShowScreen((s) => !s)}
+        onToggleConsole={() => setShowConsole((s) => !s)}
+        onToggleDebugger={() => setShowDebugger((s) => !s)}
+        onTogglePaddles={() => setShowPaddles((s) => !s)}
         onSerial={apple.connectSerial}
-        onBridge={apple.connectBridge}
+        onSerialNoVerify={apple.connectWithoutVerify}
         onDisconnect={apple.disconnect}
-        onResetEndpoint={apple.resetEndpoint}
-        onFlash={apple.flash}
         onReconnect={apple.reconnect}
       />
 
-      <main>
-        <div className="col-left">
-          <Console lines={apple.lines} onClear={apple.clearConsole} />
-          <Screen screen={apple.screen} onCapture={apple.captureScreen} busy={apple.busy} />
-        </div>
+      <main className={!hasLeftCol ? 'no-left-col' : ''}>
+        {hasLeftCol && (
+          <div className="col-left">
+            {showConsole && (
+              <Console
+                lines={apple.lines}
+                onClear={apple.clearConsole}
+                onClose={() => setShowConsole(false)}
+              />
+            )}
+            {showScreen && (
+              <Screen
+                screen={apple.screen}
+                onCapture={apple.captureScreen}
+                busy={apple.busy}
+                onClose={() => setShowScreen(false)}
+              />
+            )}
+          </div>
+        )}
 
         <div className="col-right">
-          <DebuggerPane
+          {showDebugger && (
+            <DebuggerPane
+              mode={apple.mode}
+              regs={apple.regs}
+              mem={apple.mem}
+              status={apple.status}
+              onCommand={onCommand}
+              onClearMem={apple.clearMem}
+              onToggle={apple.toggleDebugger}
+              onClose={() => setShowDebugger(false)}
+            />
+          )}
+          {showPaddles && (
+            <Gamepad
+              buttons={buttons}
+              x={paddles.x}
+              y={paddles.y}
+              onChange={onGamepad}
+              onClose={() => setShowPaddles(false)}
+            />
+          )}
+          <Keyboard
             mode={apple.mode}
-            regs={apple.regs}
-            mem={apple.mem}
-            status={apple.status}
-            onCommand={onCommand}
-            onClearMem={apple.clearMem}
-            onToggle={apple.toggleDebugger}
+            onPress={press}
+            onReset={apple.resetKey}
+            onRelease={apple.releaseKeys}
+            held={held}
+            conn={apple.conn}
+            canSerial={apple.canSerial}
+            onConnect={apple.connectSerial}
           />
-          <Gamepad buttons={buttons} x={paddles.x} y={paddles.y} onChange={onGamepad} />
-          <Keyboard mode={apple.mode} onPress={press} held={held} />
         </div>
       </main>
     </div>

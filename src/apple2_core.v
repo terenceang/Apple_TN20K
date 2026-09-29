@@ -73,9 +73,13 @@ module apple2_core (
             ce_1m_pending <= 1'b0;
     end
 
+    // A CPU cycle that really happens: while the debugger holds RDY low the
+    // enable keeps ticking, and side effects must not replay on each tick.
+    wire cpu_go = cpu_ce && cpu_rdy;
+
     assign io_addr  = cpu_addr[7:0];
-    assign io_read  = cpu_ce && !cpu_we && (cpu_addr[15:8] == 8'hC0);
-    assign io_write = cpu_ce &&  cpu_we && (cpu_addr[15:8] == 8'hC0);
+    assign io_read  = cpu_go && !cpu_we && (cpu_addr[15:8] == 8'hC0);
+    assign io_write = cpu_go &&  cpu_we && (cpu_addr[15:8] == 8'hC0);
 
     assign debug_cpu_addr = cpu_addr;
     assign debug_cpu_dout = cpu_dout;
@@ -129,7 +133,7 @@ module apple2_core (
             store80      <= 1'b0;
             intcxrom     <= 1'b1; // Default: Internal CX ROM active
             spkr_pulse   <= 1'b0;
-        end else if (cpu_ce) begin
+        end else if (cpu_go) begin
             spkr_pulse <= 1'b0;
 
             if (cpu_addr[15:8] == 8'hC0) begin
@@ -276,7 +280,8 @@ module apple2_core (
             default: sw_bit = 1'b0;
         endcase
     end
-    wire [7:0] softswitch_read_data = {sw_bit, 7'h00};
+    // Bit 7 is the switch; bits 6:0 are the last key read, as on the //e
+    wire [7:0] softswitch_read_data = {sw_bit, input_dout[6:0]};
 
     // CPU Data In (Read Bus) Multiplexer:
     reg [7:0] cpu_din_comb;

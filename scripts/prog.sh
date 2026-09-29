@@ -7,8 +7,9 @@ root=$(cd "$(dirname "$0")/.." && pwd)
 cd "$root"
 . scripts/toolchain.sh
 fs="build/bitstream/$(sed -n 's/^name: *//p' fpga.yaml).fs"
+FREQ=${FREQ:-2.5M}
 if [ "$1" = "--flash" ]; then
-    openFPGALoader -b tangnano20k -f "$fs"
+    openFPGALoader --freq "$FREQ" -b tangnano20k -f "$fs"
 else
-    openFPGALoader -b tangnano20k "$fs"
+    openFPGALoader --freq "$FREQ" -b tangnano20k "$fs"
 fi
