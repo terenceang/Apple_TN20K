@@ -210,6 +210,10 @@ RAM while the CPU is running: the 64 KB is time-multiplexed between the CPU and
 the video generator, and stealing cycles from either is how the display goes
 wrong.
 
+The screen shows text only. Hi-res is not rendered in the browser: `w` dumps
+the text page, not `$2000`/`$4000`, so a hi-res screen is only visible on the
+HDMI output.
+
 The dump is the interleaved Apple II layout, and the renderer mirrors
 `video_generator.v` exactly:
 

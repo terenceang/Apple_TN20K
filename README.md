@@ -6,14 +6,14 @@ An Apple //e implemented in Verilog for the [Sipeed Tang Nano 20K](https://wiki.
 
 - **65C02 CPU** at 1.023 MHz (Arlet Ottens' core with 65C02 extensions)
 - **64 KB RAM** in block RAM, with a **language card** for $D000–$FFFF bank switching
-- **HDMI video** at 720×480p60 (CEA-861 VIC 2), with the 560×384 Apple display centered; text and lo-res modes, including mixed mode and page 2
+- **HDMI video** at 720×480p60 (CEA-861 VIC 2), with the 560×384 Apple display centered; text, lo-res and hi-res (HGR) modes, including mixed mode and page 2; hi-res colour is an NTSC-style decode of the dot stream, so solid fills, edge fringes and the blue/orange palette bit look as they do on a TV
 - **Audio** from the $C030 speaker toggle, sent both over HDMI (48 kHz L-PCM in data islands) and through the onboard MAX98357A I2S amplifier
 - **UART keyboard** at 115200 baud over the USB-C serial bridge (or a Bluetooth-to-UART module); ANSI arrow keys are mapped to Apple control codes, and a three-byte key packet lets the Open-Apple and Solid-Apple keys drive the game paddles. There is a [browser front end](web/README.md) — keyboard, screen and debugger — in `web/`
 - **Gamepad over UART**: pushbuttons $C061–$C063 and paddles 0/1
 - **Built-in hardware debugger**: press Ctrl+B to freeze the CPU and inspect registers, single-step, or dump memory
 - **Diagnostic LEDs**: heartbeat, PLL lock, reset, CPU write, text mode, key strobe
 
-Not yet implemented: **hi-res** (the `HIRES` softswitch latches and reads back correctly at `$C01D`, but `video_generator` ignores it and always renders lo-res), auxiliary memory / 80-column display, peripheral slots, disk drives, and interrupts.
+Not yet implemented: auxiliary memory / 80-column display (the 80COL, 80STORE and ALTCHARSET switches latch but have no effect), peripheral slots, disk drives, and interrupts. The browser front end shows the text screen only, not hi-res.
 
 ## Web front end
 
@@ -181,7 +181,17 @@ Each Apple II character column occupies 14 pixel clock cycles ($27\text{ MHz} / 
 3. **Cycle 11**: Latch `vram_data` into `char_code`.
 4. **Cycle 12**: `char_rom_addr` presented to Character ROM based on ASCII code and `glyph_row` (with flash blink support).
 5. **Cycle 13**: Latch `char_rom_data` into `glyph_byte` and `char_code_display`.
-6. **Cycles 0–13**: Seven dot pairs (2 pixel clocks per dot) are sequentially rendered for text or mapped to the 16-color Lo-Res palette.
+6. **Cycles 0–13**: Seven dot pairs (2 pixel clocks per dot) are sequentially rendered for text, mapped to the 16-color Lo-Res palette, or, in hi-res, decoded to colour (below).
+
+### Hi-Res (HGR)
+
+With `hires_mode` set (and the line not one of the mixed-mode text rows), the same prefetch fetches the HGR byte instead of a character code. `vram_addr` uses the hi-res interleave: page 1 at `$2000` or page 2 at `$4000`, eight lines `$400` apart, then the same 128-byte row groups and 40-byte group offset as text. The character ROM lookup is unused for these lines.
+
+One HGR byte is 7 dots, and each dot is 2 pixels of the 560-pixel raster, so a byte fills exactly one 14-pixel slot. Bit 7 is the palette/delay bit: a set bit shifts that byte's pixels right by one pixel, which is the half-dot delay of the real hardware.
+
+Colour comes from decoding the 560-sample dot stream the way an NTSC set does. One colour-subcarrier cycle is 4 samples, so each pixel looks at the window `s[n-2..n+1]`: luma is the number of lit samples, and chroma is `I = s@phase0 - s@phase2`, `Q = s@phase1 - s@phase3` with the phase of sample `m` being `m mod 4`. The window's look-ahead sample is the next byte, already latched at cycle 12. The channel weights are `R = 64Y + 80I`, `G = 64Y - 41I - 20Q`, `B = 64Y + 101Q` (clamped), which give violet `D043E5`, green `30BD1B`, blue `3095E5`, orange `D06B1B` and white for `1100`, `0011`, their delayed forms and `1111`. A `0101` dot pattern therefore fills solid, and colour edges fringe, as on a TV. This costs no block RAM.
+
+Mixed mode keeps the bottom four lines on the text page. Hi-res was checked on the board with page 1 mixed, page 1 full-screen, page 2, and lo-res and text as regressions; `sim/tb_video_hdmi.v` checks a whole page-2 mixed frame pixel by pixel against an independent model.
 
 ### Full-Range RGB Quantization
 
