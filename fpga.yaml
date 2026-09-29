@@ -8,6 +8,8 @@ sources:
   - src/cpu/cpu_65c02.v
   - src/clk_gen.v
   - src/apple2_mem.v
+  - src/sdram/sdram.v
+  - src/aux_ram.v
   - src/apple2_core.v
   - src/video_generator.v
   - src/colorbar_gen.v

@@ -25,7 +25,7 @@ run_tb () {
     name=$1
     shift
     printf '=== %s ===\n' "$name"
-    iverilog -g2005 -o "build/$name" "sim/$name.v" "$@"
+    iverilog -g${gen:-2005} -o "build/$name" "sim/$name.v" "$@"
     log="build/$name.log"
     # Capture status around the run: in a pipeline the status seen by `if` is
     # the last command's (tee's), so run it on its own first.
@@ -71,8 +71,16 @@ run_tb tb_video_hdmi src/video_generator.v src/colorbar_gen.v $hdmi
 # CPU boot and trace from Apple //e System ROM
 run_tb tb_cpu_trace src/apple2_core.v src/apple2_mem.v src/cpu/cpu_65c02.v src/cpu/ALU.v
 
+# Aux/slot-ROM softswitches and internal-ROM gating
+run_tb tb_auxsw src/apple2_core.v src/apple2_mem.v src/cpu/cpu_65c02.v src/cpu/ALU.v
+
+# The vendored SDRAM controller declares a variable in an unnamed block, which
+# needs SystemVerilog (gen=2012); nothing else in the suite compiles with it.
+# Aux RAM (SDRAM controller + line buffer + CPU port) on an SDRAM model
+gen=2012 run_tb tb_aux_ram sim/models/sdram_model.v src/aux_ram.v src/sdram/sdram.v
+
 # Board level: top.v on behavioural Gowin primitives, pins deserialised.
 # shellcheck disable=SC2046
-run_tb tb_top sim/models/gowin_prims.v $(scripts/sources.sh)
+gen=2012 run_tb tb_top sim/models/gowin_prims.v sim/models/sdram_model.v $(scripts/sources.sh)
 
 echo 'all testbenches passed'

@@ -21,6 +21,8 @@ module apple2_core (
     output reg         mixed_mode,
     output reg         page2,
     output reg         hires_mode,
+    output reg         col80,
+    output reg         store80,
     input  wire        vbl,
 
     // Video Generator RAM and Char ROM access
@@ -29,6 +31,17 @@ module apple2_core (
     output reg  [7:0]  vram_data,
     input  wire [11:0] char_rom_addr,
     output wire [7:0]  char_rom_data,
+
+    // Aux RAM port (aux_ram.v): the CPU's reads and writes that the aux
+    // switches send to the second 64 KB
+    output wire        aux_rd_want,
+    output wire [15:0] aux_rd_addr,
+    input  wire        aux_rd_hit,
+    input  wire [7:0]  aux_rd_data,
+    output wire        aux_wr_go,
+    output wire [15:0] aux_wr_addr,
+    output wire [7:0]  aux_wr_data,
+    input  wire        aux_wr_busy,
 
     // Diagnostic status & Debugger Interface
     input  wire        cpu_rdy,
@@ -61,7 +74,8 @@ module apple2_core (
     // contention/corruption between video prefetch and CPU RAM reads/writes,
     // avoiding display flickering/scrolling artifacts.
     reg ce_1m_pending;
-    wire video_busy = vram_req || vram_req_d;
+    // The same hold applies while an aux RAM access is not ready (aux_stall).
+    wire video_busy = vram_req || vram_req_d || aux_stall;
     wire cpu_ce = (ce_1m || ce_1m_pending) && !video_busy;
 
     always @(posedge clk or posedge reset) begin
@@ -113,9 +127,12 @@ module apple2_core (
     reg lc_write_ram;   // 1: Write LC RAM enabled
     reg lc_pre_write;   // Two successive reads required to enable write
     reg altchar;        // 1: Alternate character set
-    reg col80;          // 1: 80 column mode
-    reg store80;        // 1: 80STORE active
     reg intcxrom;       // 1: Internal CX ROM ($C100-$CFFF) active
+    reg slotc3rom;      // 1: slot 3 ROM at $C300 (0: internal 80-col firmware)
+    reg intc8rom;       // 1: internal ROM at $C800-$CFFF (set by a $C3xx access)
+    reg ramrd;          // 1: reads of $0200-$BFFF come from aux RAM
+    reg ramwrt;         // 1: writes to $0200-$BFFF go to aux RAM
+    reg altzp;          // 1: zero page, stack and language card use aux RAM
 
     // Softswitches decoding on posedge clk when ce_1m is active
     always @(posedge clk or posedge reset) begin
@@ -132,9 +149,20 @@ module apple2_core (
             col80        <= 1'b0;
             store80      <= 1'b0;
             intcxrom     <= 1'b1; // Default: Internal CX ROM active
+            slotc3rom    <= 1'b0;
+            intc8rom     <= 1'b0;
+            ramrd        <= 1'b0;
+            ramwrt       <= 1'b0;
+            altzp        <= 1'b0;
             spkr_pulse   <= 1'b0;
         end else if (cpu_go) begin
             spkr_pulse <= 1'b0;
+
+            // INTC8ROM: set by any $C3xx access with SLOTC3ROM off, cleared by $CFFF
+            if (cpu_addr[15:8] == 8'hC3 && !slotc3rom)
+                intc8rom <= 1'b1;
+            else if (cpu_addr == 16'hCFFF)
+                intc8rom <= 1'b0;
 
             if (cpu_addr[15:8] == 8'hC0) begin
                 // Speaker toggle at $C030
@@ -157,7 +185,11 @@ module apple2_core (
                 if (cpu_we && (cpu_addr[7:4] == 4'h0)) begin
                     case (cpu_addr[3:1])
                         3'd0: store80  <= cpu_addr[0]; // $C000/$C001: 80STORE
+                        3'd1: ramrd    <= cpu_addr[0]; // $C002/$C003: RAMRD
+                        3'd2: ramwrt   <= cpu_addr[0]; // $C004/$C005: RAMWRT
                         3'd3: intcxrom <= cpu_addr[0]; // $C006/$C007: INTCXROM
+                        3'd4: altzp    <= cpu_addr[0]; // $C008/$C009: ALTZP
+                        3'd5: slotc3rom <= cpu_addr[0]; // $C00A/$C00B: SLOTC3ROM
                         3'd6: col80    <= cpu_addr[0]; // $C00C/$C00D: 80COL
                         3'd7: altchar  <= cpu_addr[0]; // $C00E/$C00F: ALTCHAR
                         default: ;
@@ -197,9 +229,30 @@ module apple2_core (
     wire is_slot_rom = (effective_cpu_addr >= 16'hC100 && effective_cpu_addr < 16'hD000);
     wire is_lc_area  = (effective_cpu_addr >= 16'hD000);
 
+    // Aux RAM selection, from the CPU's own address (the debugger, which runs
+    // with cpu_rdy low, sees main RAM only):
+    //   $0000-$01FF zero page and stack   ALTZP
+    //   $0200-$BFFF                       RAMRD / RAMWRT, except that with
+    //                                     80STORE the text page ($0400-$07FF)
+    //                                     and, with HIRES, $2000-$3FFF follow PAGE2
+    //   $D000-$FFFF language card RAM     ALTZP
+    wire st_page = store80 && (cpu_addr[15:10] == 6'b000001 ||
+                               (hires_mode && cpu_addr[15:13] == 3'b001));
+    wire aux_sel_rd = cpu_rdy && (cpu_addr < 16'h0200 ? altzp :
+                                  cpu_addr < 16'hC000 ? (st_page ? page2 : ramrd) :
+                                  cpu_addr >= 16'hD000 ? (lc_read_ram && altzp) : 1'b0);
+    wire aux_sel_wr = cpu_rdy && (cpu_addr < 16'h0200 ? altzp :
+                                  cpu_addr < 16'hC000 ? (st_page ? page2 : ramwrt) :
+                                  cpu_addr >= 16'hD000 ? (lc_write_ram && altzp) : 1'b0);
+    assign aux_rd_want = aux_sel_rd && !cpu_we;
+    wire   aux_stall   = (aux_rd_want && !aux_rd_hit) || (aux_sel_wr && cpu_we && aux_wr_busy);
+    assign aux_wr_go   = cpu_go && cpu_we && aux_sel_wr;
+    assign aux_wr_data = cpu_dout;
+
     // RAM Write Enable:
     // Writes go to RAM if in $0000-$BFFF, or if in $D000-$FFFF with lc_write_ram enabled
-    wire ram_we_cpu = cpu_we && (is_ram_base || (is_lc_area && lc_write_ram));
+    // (and not to the aux RAM instead)
+    wire ram_we_cpu = cpu_we && !aux_sel_wr && (is_ram_base || (is_lc_area && lc_write_ram));
     wire ram_we     = (cpu_ce && cpu_rdy) ? ram_we_cpu : 1'b0;
 
     // Dual-latch RAM arbitration between CPU and Video Generator
@@ -213,6 +266,8 @@ module apple2_core (
 
     wire is_lc_bank2_d = lc_bank2 && (effective_cpu_addr >= 16'hD000 && effective_cpu_addr < 16'hE000);
     wire [15:0] cpu_ram_addr = is_lc_bank2_d ? {4'hC, effective_cpu_addr[11:0]} : effective_cpu_addr;
+    assign aux_rd_addr = cpu_ram_addr;
+    assign aux_wr_addr = cpu_ram_addr;
     wire ram_addr_is_video = vram_req;
     wire [15:0] ram_addr   = ram_addr_is_video ? vram_addr : cpu_ram_addr;
     wire [7:0]  ram_din    = cpu_dout;
@@ -267,8 +322,11 @@ module apple2_core (
         case (effective_cpu_addr[3:0])
             4'h1:    sw_bit = lc_bank2;       // $C011 RDLCBNK2
             4'h2:    sw_bit = lc_read_ram;    // $C012 RDLCRAM
+            4'h3:    sw_bit = ramrd;          // $C013 RDRAMRD
+            4'h4:    sw_bit = ramwrt;         // $C014 RDRAMWRT
             4'h5:    sw_bit = intcxrom;       // $C015 RDCXROM
-            4'h7:    sw_bit = 1'b1;           // $C017 RDC3ROM
+            4'h6:    sw_bit = altzp;          // $C016 RDALTZP
+            4'h7:    sw_bit = slotc3rom;      // $C017 RDC3ROM
             4'h8:    sw_bit = store80;        // $C018 RD80STORE
             4'h9:    sw_bit = ~vbl;           // $C019 RDVBLBAR
             4'hA:    sw_bit = text_mode;      // $C01A RDTEXT
@@ -287,7 +345,7 @@ module apple2_core (
     reg [7:0] cpu_din_comb;
     always @(*) begin
         if (is_ram_base) begin
-            cpu_din_comb = cpu_ram_dout;
+            cpu_din_comb = aux_sel_rd ? aux_rd_data : cpu_ram_dout;
         end else if (is_io) begin
             if (input_hit) begin
                 cpu_din_comb = input_dout;
@@ -297,10 +355,15 @@ module apple2_core (
                 cpu_din_comb = 8'h00;
             end
         end else if (is_slot_rom) begin
-            cpu_din_comb = rom_dout; // System ROM provides internal firmware for $C100-$CFFF
+            // No slot cards: the internal ROM answers when selected, else the bus floats
+            if (intcxrom || (effective_cpu_addr[15:8] == 8'hC3 && !slotc3rom)
+                         || (effective_cpu_addr >= 16'hC800 && intc8rom))
+                cpu_din_comb = rom_dout;
+            else
+                cpu_din_comb = 8'h00;
         end else if (is_lc_area) begin
             if (lc_read_ram)
-                cpu_din_comb = cpu_ram_dout; // Read from Language Card RAM
+                cpu_din_comb = aux_sel_rd ? aux_rd_data : cpu_ram_dout; // Language Card RAM
             else
                 cpu_din_comb = rom_dout; // Read from System ROM (Applesoft BASIC + Monitor)
         end else begin

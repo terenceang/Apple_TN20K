@@ -57,6 +57,8 @@ module tb_cpu_trace;
         .vram_data(),
         .char_rom_addr(12'd0),
         .char_rom_data(),
+        .aux_rd_want(), .aux_rd_addr(), .aux_rd_hit(1'b1), .aux_rd_data(8'h00),
+        .aux_wr_go(), .aux_wr_addr(), .aux_wr_data(), .aux_wr_busy(1'b0),
         .cpu_rdy(1'b1),
         .dbg_mem_addr(16'd0),
         .dbg_mem_din(),

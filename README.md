@@ -13,7 +13,7 @@ An Apple //e implemented in Verilog for the [Sipeed Tang Nano 20K](https://wiki.
 - **Built-in hardware debugger**: press Ctrl+B to freeze the CPU and inspect registers, single-step, or dump memory
 - **Diagnostic LEDs**: heartbeat, PLL lock, reset, CPU write, text mode, key strobe
 
-Not yet implemented: auxiliary memory / 80-column display (the 80COL, 80STORE and ALTCHARSET switches latch but have no effect), peripheral slots, disk drives, and interrupts. The browser front end shows the text screen only, not hi-res.
+Auxiliary 64 KB (in the board's on-board SDRAM, via the GPL-3 controller in `src/sdram/`) and 80-column text are implemented; not yet: double hi-res, MouseText (ALTCHARSET latches but has no effect), peripheral slots, disk drives, and interrupts. The browser front end shows the text screen only, not hi-res.
 
 ## Web front end
 

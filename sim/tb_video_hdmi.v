@@ -35,6 +35,8 @@ module tb_video_hdmi;
     reg bars  = 1'b0;                       // 0: Apple video, 1: colour bars
     reg text_mode = 1'b1, mixed_mode = 1'b0, page2 = 1'b0, hires_mode = 1'b0;
     reg hgr_phase = 1'b0;                   // expect Hi-Res (page 2, mixed) instead of text
+    reg col80 = 1'b0, store80 = 1'b0;
+    reg wide_phase = 1'b0;                  // expect 80-column text (aux char first)
     reg skip      = 1'b0;                   // frame in which the mode changes: not checked
     reg [15:0] txt_base = 16'h0400;         // text page the model reads
 
@@ -47,6 +49,7 @@ module tb_video_hdmi;
     wire        vram_req, vbl;
     wire [15:0] vram_addr;
     reg  [7:0]  vram_data;
+    reg  [7:0]  aux_data;
     wire [11:0] char_rom_addr;
     reg  [7:0]  char_rom_data;
 
@@ -54,6 +57,7 @@ module tb_video_hdmi;
         .clk_pixel(clk), .reset(!rst_n), .flash_clk(1'b0),
         .h_cnt(pixel_x + 10'd1), .v_cnt(pixel_y),
         .text_mode(text_mode), .mixed_mode(mixed_mode), .page2(page2), .hires_mode(hires_mode),
+        .col80(col80), .store80(store80), .aux_data(aux_data),
         .vram_req(vram_req), .vram_addr(vram_addr), .vram_data(vram_data),
         .char_rom_addr(char_rom_addr), .char_rom_data(char_rom_data),
         .red(vid_r), .green(vid_g), .blue(vid_b), .vbl(vbl)
@@ -77,13 +81,18 @@ module tb_video_hdmi;
     // -----------------------------------------------------------------------
     reg [7:0] ram [0:65535];
     reg [7:0] crom [0:4095];
-    reg [7:0] ram_dout;
+    reg [7:0] aux_ram [0:65535];
+    reg [7:0] ram_dout, aux_ram_dout;
     reg       vram_req_d;
 
     always @(posedge clk) begin
         ram_dout      <= ram[vram_addr];
+        aux_ram_dout  <= aux_ram[vram_addr];
         vram_req_d    <= vram_req;
-        if (vram_req_d) vram_data <= ram_dout;
+        if (vram_req_d) begin
+            vram_data <= ram_dout;
+            aux_data  <= aux_ram_dout;
+        end
         char_rom_data <= crom[char_rom_addr];
     end
 
@@ -121,6 +130,31 @@ module tb_video_hdmi;
                 // web/test/charset.test.js pins the same convention against the
                 // real 342-0265-A dump.
                 expect_apple = ~g[dot] ? 24'h20E820 : 24'h020602;
+            end
+        end
+    endfunction
+
+    // 80-column text page 1: 7 one-clock dots per character, aux character
+    // in the left half of each 14-pixel slot, main in the right.
+    function [23:0] expect_apple80;
+        input integer x, y;
+        integer col, d, ay, row, gr;
+        reg [7:0] c, g;
+        reg [11:0] a;
+        begin
+            if (x < 80 || x >= 640 || y < 48 || y >= 432) begin
+                expect_apple80 = 24'h000000;
+            end else begin
+                col = (x - 80) / 14;
+                d   = (x - 80) % 14;
+                ay  = (y - 48) / 2;
+                row = ay / 8;
+                gr  = ay % 8;
+                c   = (d < 7) ? aux_ram[16'h0400 + row_base(row) + col]
+                              : ram[16'h0400 + row_base(row) + col];
+                a   = {1'b0, c[7], c[6] & c[7], c[5:0], gr[2:0]};
+                g   = crom[a];
+                expect_apple80 = ~g[(d < 7) ? d : d - 7] ? 24'h20E820 : 24'h020602;
             end
         end
     endfunction
@@ -230,7 +264,8 @@ module tb_video_hdmi;
 
         if (x >= 0) begin
             got  = {tmds_dec(s2), tmds_dec(s1), tmds_dec(s0)};
-            want = bars ? expect_bars(x, y) : hgr_phase ? expect_hgr(x, y) : expect_apple(x, y);
+            want = bars ? expect_bars(x, y) : hgr_phase ? expect_hgr(x, y) :
+                   wide_phase ? expect_apple80(x, y) : expect_apple(x, y);
             if (frame >= 1 && !skip && want !== 24'hxxxxxx) begin
                 checked = checked + 1;
                 if (got !== want) begin
@@ -350,8 +385,10 @@ module tb_video_hdmi;
         // (row, code or bank) shows up as a different dot pattern.
         for (i = 0; i < 4096; i = i + 1)
             crom[i] = (i * 8'd37) ^ (i >> 5) ^ 8'h5A;
-        for (i = 0; i < 65536; i = i + 1)
+        for (i = 0; i < 65536; i = i + 1) begin
             ram[i] = 8'h00;
+            aux_ram[i] = 8'h00;
+        end
         // Text page 1: distinct code per screen position.
         for (i = 0; i < 24 * 40; i = i + 1)
             ram[16'h0400 + row_base(i / 40) + (i % 40)] = (i * 7 + 3) & 8'hFF;
@@ -434,6 +471,23 @@ module tb_video_hdmi;
             $display("FAIL: bit-7 HGR line is %06h", expect_hgr(80 + 14 * 10 + 4, 48 + 2 * 4));
             errors = errors + 1;
         end
+        // 80-column text, page 1: aux and main hold different characters.
+        // store80 with page2 set must still show page 1.
+        bars_checked = checked;
+        for (i = 0; i < 24 * 40; i = i + 1)
+            aux_ram[16'h0400 + row_base(i / 40) + (i % 40)] = (i * 13 + 9) & 8'hFF;
+        skip = 1'b1; hgr_phase = 1'b0; wide_phase = 1'b1;
+        text_mode = 1'b1; mixed_mode = 1'b0; hires_mode = 1'b0;
+        page2 = 1'b1; store80 = 1'b1; col80 = 1'b1;
+        wait (frame == 6);
+        skip = 1'b0;
+        wait (frame == 7);
+        if (checked - bars_checked < 720 * 480 - 4 || checked - bars_checked > 720 * 480 + 4) begin
+            $display("FAIL: checked %0d 80-col pixels, expected about %0d",
+                     checked - bars_checked, 720 * 480);
+            errors = errors + 1;
+        end
+        $display("%0d 80-column pixels checked", checked - bars_checked);
         if (errors == 0) $display("tb_video_hdmi: PASS");
         else             $display("tb_video_hdmi: FAIL (%0d errors)", errors);
         $finish;

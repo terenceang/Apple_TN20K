@@ -24,11 +24,21 @@ module video_generator (
     input  wire        mixed_mode,   // 1: Bottom 4 lines are text
     input  wire        page2,        // 1: Page 2, 0: Page 1
     input  wire        hires_mode,   // 1: Hi-Res, 0: Lo-Res
+    input  wire        col80,        // 1: 80-column text (aux byte first, then main)
+    input  wire        store80,      // 1: 80STORE, PAGE2 no longer selects the display page
 
     // Video RAM interface (reads from main 64KB RAM)
     output wire        vram_req,
     output wire [15:0] vram_addr,
     input  wire [7:0]  vram_data,
+    // Aux RAM byte at vram_addr, valid on the same clock as vram_data
+    input  wire [7:0]  aux_data,
+    // Aux line buffer control (see aux_ram.v): the column being fetched, and a
+    // pulse in the blanking of the previous line asking for the 40 aux bytes
+    // of the text row the next line shows.
+    output wire [5:0]  aux_col,
+    output wire [15:0] aux_fill_addr,
+    output wire        aux_fill_start,
 
     // Character ROM interface
     output wire [11:0] char_rom_addr,
@@ -62,6 +72,19 @@ module video_generator (
     wire [4:0] text_row = a2_y[7:3];       // a2_y / 8
     wire [2:0] glyph_row = a2_y[2:0];      // a2_y % 8
     
+    // 80-column text: each 14-clock slot shows two characters, aux then main,
+    // 7 one-clock dots each. Only text lines are affected; graphics keep the
+    // 40-column pipeline. The wide slot fetches one clock earlier (sub_col 8
+    // instead of 9) so the ROM can be looked up twice: aux at sub_col 11,
+    // main at 12. eff_sub is sub_col, extended to the pre-roll slot that runs
+    // h_cnt 66..79 ahead of column 0 (there sub_col is parked at 0).
+    wire is_text_line = text_mode || (mixed_mode && (text_row >= 5'd20));
+    wire wide         = col80 && is_text_line;
+    wire pre          = (h_cnt >= 10'd66) && (h_cnt < 10'd80);
+    wire slot_act     = in_apple_x || pre;
+    wire [3:0] eff_sub = in_apple_x ? sub_col : (h_cnt - 10'd66);
+    wire [3:0] req_sub = wide ? 4'd8 : 4'd9;
+
     // Column counter (0..39)
     reg [5:0] col_cnt;
     reg [3:0] sub_col; // 0..13 (14 cycles per character)
@@ -84,38 +107,48 @@ module video_generator (
     end
 
     // Next column to prefetch from RAM
-    wire [5:0] fetch_col = (sub_col >= 4'd9) ? ((col_cnt == 6'd39) ? 6'd0 : col_cnt + 1'b1) : col_cnt;
+    wire [5:0] fetch_col = (sub_col >= req_sub) ? ((col_cnt == 6'd39) ? 6'd0 : col_cnt + 1'b1) : col_cnt;
 
     // Apple II text/lores interleaved memory base address calculation:
     // Screen is split into 3 groups of 8 rows (each 128 bytes apart), offset by 40 bytes per group.
     wire [6:0]  row_group_offset = (text_row[4:3] == 2'd1) ? 7'd40 :
                                    (text_row[4:3] == 2'd2) ? 7'd80 : 7'd0;
     wire [9:0]  row_offset       = {text_row[2:0], 7'd0} + {3'd0, row_group_offset};
-    wire [15:0] base_page        = page2 ? 16'h0800 : 16'h0400;
+    wire        disp_page2       = page2 && !store80;
+    wire [15:0] base_page        = disp_page2 ? 16'h0800 : 16'h0400;
     wire [15:0] text_addr        = base_page + {6'd0, row_offset} + {10'd0, fetch_col};
 
     // Hi-Res: 8 interleaved lines 0x400 apart, then the same 128/40-byte
     // row grouping as text (a2_y[5:3] == text_row[2:0], a2_y[7:6] == text_row[4:3]).
-    wire        is_text_line     = text_mode || (mixed_mode && (text_row >= 5'd20));
-    wire [15:0] hgr_base         = page2 ? 16'h4000 : 16'h2000;
+        wire [15:0] hgr_base         = disp_page2 ? 16'h4000 : 16'h2000;
     wire [15:0] hgr_addr         = hgr_base + {3'd0, glyph_row, 10'd0} + {6'd0, row_offset} + {10'd0, fetch_col};
     assign vram_addr             = (hires_mode && !is_text_line) ? hgr_addr : text_addr;
 
+    assign aux_col = fetch_col;
+    wire [9:0]  a2_next = (v_cnt + 10'd1 - 10'd48) >> 1;
+    wire [4:0]  trow_n  = a2_next[7:3];
+    wire [6:0]  rgo_n   = (trow_n[4:3] == 2'd1) ? 7'd40 : (trow_n[4:3] == 2'd2) ? 7'd80 : 7'd0;
+    assign aux_fill_addr  = base_page + {6'd0, {trow_n[2:0], 7'd0} + {3'd0, rgo_n}};
+    assign aux_fill_start = col80 && (v_cnt >= 10'd47) && (v_cnt < 10'd431) && (h_cnt == 10'd660);
+
     // Request RAM access during prefetch cycles only (1 cycle per character column + 1 cycle before col 0)
-    assign vram_req = in_apple_y && ((in_apple_x && (sub_col == 4'd9)) || (h_cnt == 10'd75));
+    assign vram_req = in_apple_y && slot_act && (eff_sub == req_sub);
 
     // Pipelined data latches
     reg [7:0] char_code;
     reg [7:0] char_code_display;
     reg [7:0] glyph_byte;
+    reg [7:0] aux_code;   // 80-column: aux character of the slot, and its glyph row
+    reg [7:0] glyph_aux;
     reg       prev_last; // last dot of the previous HGR byte (0 at column 0)
 
     // Character ROM address lookup
+    wire [7:0] rom_code = (wide && slot_act && eff_sub == 4'd11) ? aux_code : char_code;
     assign char_rom_addr = {
         1'b0,
-        (char_code[7] | (char_code[6] & flash_clk)),
-        (char_code[6] & char_code[7]),
-        char_code[5:0],
+        (rom_code[7] | (rom_code[6] & flash_clk)),
+        (rom_code[6] & rom_code[7]),
+        rom_code[5:0],
         glyph_row[2:0]
     };
 
@@ -130,11 +163,16 @@ module video_generator (
             char_code         <= 8'hA0; // space
             char_code_display <= 8'hA0;
             glyph_byte        <= 8'h00;
+            aux_code          <= 8'hA0;
+            glyph_aux         <= 8'hFF;
             prev_last         <= 1'b0;
         end else begin
-            if (sub_col == 4'd11 || h_cnt == 10'd77) begin
+            if (slot_act && eff_sub == req_sub + 4'd2) begin
                 char_code <= vram_data;
+                aux_code  <= aux_data;
             end
+            if (wide && slot_act && eff_sub == 4'd12)
+                glyph_aux <= char_rom_data;
             if (sub_col == 4'd13 || h_cnt == 10'd79) begin
                 glyph_byte        <= char_rom_data;
                 char_code_display <= char_code;
@@ -153,7 +191,11 @@ module video_generator (
     // other way round so the same inversion draws it dark on light.
     // dot_index 0 is the leftmost dot, bit 0 of the byte.
     // web/src/charset.js reproduces this, so the browser and HDMI agree.
-    wire pixel_on = ~glyph_byte[dot_index];
+    // 80-column: aux glyph for sub_col 0..6, main glyph for 7..13, one clock per dot.
+    wire       right_half = (sub_col >= 4'd7);
+    wire [3:0] dot80      = right_half ? sub_col - 4'd7 : sub_col;
+    wire [7:0] g80        = right_half ? glyph_byte : glyph_aux;
+    wire pixel_on = wide ? ~g80[dot80[2:0]] : ~glyph_byte[dot_index];
 
     // Hi-Res dot stream. char_code_display is the byte on screen (bit 0 is the
     // leftmost dot, bit 7 the palette/delay bit); char_code already holds the

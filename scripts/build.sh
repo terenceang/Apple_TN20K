@@ -55,7 +55,10 @@ if [ "$want_synth" = 1 ]; then
         echo "# Project: $name"
         echo "# Board:   Sipeed Tang Nano 20K (GW2AR-LV18QN88C8/I7)"
         echo
-        scripts/sources.sh | sed 's/^/read_verilog -noblackbox /'
+        # src/sdram/ is a vendored SystemVerilog-flavoured file (a variable
+        # declared in an unnamed block); everything else is plain Verilog.
+        scripts/sources.sh | sed -e 's|^|read_verilog -noblackbox |' \
+                                 -e 's|^\(read_verilog -noblackbox \)\(src/sdram/\)|\1-sv \2|'
         echo
         echo "synth_gowin -top top -json build/yosys/top.json"
     } > build/yosys/synth.ys

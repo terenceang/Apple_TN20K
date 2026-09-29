@@ -25,7 +25,19 @@ module top (
     output wire       i2s_bclk,   // Pin 56
     output wire       i2s_lrck,   // Pin 55
     output wire       i2s_din,    // Pin 54
-    output wire       pa_en       // Pin 51
+    output wire       pa_en,      // Pin 51
+
+    // On-board 64 Mbit SDRAM (inside the GW2AR-18 package): the aux 64 KB
+    output wire        O_sdram_clk,
+    output wire        O_sdram_cke,
+    output wire        O_sdram_cs_n,
+    output wire        O_sdram_cas_n,
+    output wire        O_sdram_ras_n,
+    output wire        O_sdram_wen_n,
+    inout  wire [31:0] IO_sdram_dq,
+    output wire [10:0] O_sdram_addr,
+    output wire [1:0]  O_sdram_ba,
+    output wire [3:0]  O_sdram_dqm
 );
 
     // Power-on and Button Reset Generator (S2 pushbutton triggers reset when pressed = 1)
@@ -83,6 +95,8 @@ module top (
     wire        mixed_mode;
     wire        page2;
     wire        hires_mode;
+    wire        col80;
+    wire        store80;
     wire        vbl;
 
     serial_debugger u_debugger (
@@ -149,6 +163,26 @@ module top (
     wire [11:0] char_rom_addr;
     wire [7:0]  char_rom_data;
 
+    // Aux RAM (SDRAM) between the core, the video line buffer and the pins
+    wire        aux_rd_want, aux_rd_hit, aux_wr_go, aux_wr_busy;
+    wire [15:0] aux_rd_addr, aux_wr_addr;
+    wire [7:0]  aux_rd_data, aux_wr_data, aux_line_data;
+    wire        aux_fill_start;
+    wire [15:0] aux_fill_addr;
+    wire [5:0]  aux_col;
+
+    aux_ram u_aux (
+        .clk(clk_pixel), .reset(sys_reset),
+        .fill_start(aux_fill_start), .fill_addr(aux_fill_addr), .col(aux_col),
+        .line_data(aux_line_data),
+        .rd_want(aux_rd_want), .rd_addr(aux_rd_addr), .rd_data(aux_rd_data), .rd_hit(aux_rd_hit),
+        .wr_go(aux_wr_go), .wr_addr(aux_wr_addr), .wr_data(aux_wr_data), .wr_busy(aux_wr_busy),
+        .O_sdram_clk(O_sdram_clk), .O_sdram_cke(O_sdram_cke), .O_sdram_cs_n(O_sdram_cs_n),
+        .O_sdram_cas_n(O_sdram_cas_n), .O_sdram_ras_n(O_sdram_ras_n), .O_sdram_wen_n(O_sdram_wen_n),
+        .IO_sdram_dq(IO_sdram_dq), .O_sdram_addr(O_sdram_addr), .O_sdram_ba(O_sdram_ba),
+        .O_sdram_dqm(O_sdram_dqm)
+    );
+
     apple2_core u_core (
         .clk(clk_pixel),
         .reset(sys_reset | cpu_reset_req | kbd_reset),
@@ -163,12 +197,18 @@ module top (
         .mixed_mode(mixed_mode),
         .page2(page2),
         .hires_mode(hires_mode),
+        .col80(col80),
+        .store80(store80),
         .vbl(vbl),
         .vram_req(vram_req),
         .vram_addr(vram_addr),
         .vram_data(vram_data),
         .char_rom_addr(char_rom_addr),
         .char_rom_data(char_rom_data),
+        .aux_rd_want(aux_rd_want), .aux_rd_addr(aux_rd_addr),
+        .aux_rd_hit(aux_rd_hit), .aux_rd_data(aux_rd_data),
+        .aux_wr_go(aux_wr_go), .aux_wr_addr(aux_wr_addr), .aux_wr_data(aux_wr_data),
+        .aux_wr_busy(aux_wr_busy),
         .cpu_rdy(cpu_rdy),
         .dbg_mem_addr(dbg_mem_addr),
         .dbg_mem_din(dbg_mem_din),
@@ -217,6 +257,12 @@ module top (
         .mixed_mode(mixed_mode),
         .page2(page2),
         .hires_mode(hires_mode),
+        .col80(col80),
+        .store80(store80),
+        .aux_data(aux_line_data),
+        .aux_col(aux_col),
+        .aux_fill_addr(aux_fill_addr),
+        .aux_fill_start(aux_fill_start),
         .vram_req(vram_req),
         .vram_addr(vram_addr),
         .vram_data(vram_data),
