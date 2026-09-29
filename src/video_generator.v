@@ -25,6 +25,8 @@ module video_generator (
     input  wire        page2,        // 1: Page 2, 0: Page 1
     input  wire        hires_mode,   // 1: Hi-Res, 0: Lo-Res
     input  wire        col80,        // 1: 80-column text (aux byte first, then main)
+    input  wire        dhires,       // 1: double hi-res (with col80 and HIRES): aux byte then main, 560 dots
+    input  wire        altchar,      // 1: alternate character set (MouseText, no flashing)
     input  wire        store80,      // 1: 80STORE, PAGE2 no longer selects the display page
 
     // Video RAM interface (reads from main 64KB RAM)
@@ -80,10 +82,13 @@ module video_generator (
     // h_cnt 66..79 ahead of column 0 (there sub_col is parked at 0).
     wire is_text_line = text_mode || (mixed_mode && (text_row >= 5'd20));
     wire wide         = col80 && is_text_line;
+    // Double hi-res shares the wide slot: an aux byte then a main byte per 14 clocks,
+    // fetched at sub_col 8 so both are latched by sub_col 10.
+    wire dh           = col80 && dhires && hires_mode && !is_text_line;
     wire pre          = (h_cnt >= 10'd66) && (h_cnt < 10'd80);
     wire slot_act     = in_apple_x || pre;
     wire [3:0] eff_sub = in_apple_x ? sub_col : (h_cnt - 10'd66);
-    wire [3:0] req_sub = wide ? 4'd8 : 4'd9;
+    wire [3:0] req_sub = (wide || dh) ? 4'd8 : 4'd9;
 
     // Column counter (0..39)
     reg [5:0] col_cnt;
@@ -120,7 +125,7 @@ module video_generator (
 
     // Hi-Res: 8 interleaved lines 0x400 apart, then the same 128/40-byte
     // row grouping as text (a2_y[5:3] == text_row[2:0], a2_y[7:6] == text_row[4:3]).
-        wire [15:0] hgr_base         = disp_page2 ? 16'h4000 : 16'h2000;
+    wire [15:0] hgr_base         = disp_page2 ? 16'h4000 : 16'h2000;
     wire [15:0] hgr_addr         = hgr_base + {3'd0, glyph_row, 10'd0} + {6'd0, row_offset} + {10'd0, fetch_col};
     assign vram_addr             = (hires_mode && !is_text_line) ? hgr_addr : text_addr;
 
@@ -128,7 +133,12 @@ module video_generator (
     wire [9:0]  a2_next = (v_cnt + 10'd1 - 10'd48) >> 1;
     wire [4:0]  trow_n  = a2_next[7:3];
     wire [6:0]  rgo_n   = (trow_n[4:3] == 2'd1) ? 7'd40 : (trow_n[4:3] == 2'd2) ? 7'd80 : 7'd0;
-    assign aux_fill_addr  = base_page + {6'd0, {trow_n[2:0], 7'd0} + {3'd0, rgo_n}};
+    // The aux bytes of the next line: its hi-res line for double hi-res, else its text row.
+    wire        text_n    = text_mode || (mixed_mode && (trow_n >= 5'd20));
+    wire [9:0]  roff_n    = {trow_n[2:0], 7'd0} + {3'd0, rgo_n};
+    assign aux_fill_addr  = (hires_mode && !text_n)
+                          ? hgr_base + {3'd0, a2_next[2:0], 10'd0} + {6'd0, roff_n}
+                          : base_page + {6'd0, roff_n};
     assign aux_fill_start = col80 && (v_cnt >= 10'd47) && (v_cnt < 10'd431) && (h_cnt == 10'd660);
 
     // Request RAM access during prefetch cycles only (1 cycle per character column + 1 cycle before col 0)
@@ -138,16 +148,20 @@ module video_generator (
     reg [7:0] char_code;
     reg [7:0] char_code_display;
     reg [7:0] glyph_byte;
+    reg [7:0] aux_disp;   // aux byte on screen (double hi-res)
     reg [7:0] aux_code;   // 80-column: aux character of the slot, and its glyph row
     reg [7:0] glyph_aux;
     reg       prev_last; // last dot of the previous HGR byte (0 at column 0)
 
     // Character ROM address lookup
     wire [7:0] rom_code = (wide && slot_act && eff_sub == 4'd11) ? aux_code : char_code;
+    // $40-$7F flash between the inverse ($000) and normal ($400) blocks, or with
+    // ALTCHARSET on, read the $200 block instead: MouseText for $40-$5F and
+    // inverse lowercase for $60-$7F. $00-$3F and $80-$FF are the same in both sets.
     assign char_rom_addr = {
         1'b0,
-        (rom_code[7] | (rom_code[6] & flash_clk)),
-        (rom_code[6] & rom_code[7]),
+        (rom_code[7] | (rom_code[6] & flash_clk & ~altchar)),
+        (rom_code[6] & (rom_code[7] | altchar)),
         rom_code[5:0],
         glyph_row[2:0]
     };
@@ -164,6 +178,7 @@ module video_generator (
             char_code_display <= 8'hA0;
             glyph_byte        <= 8'h00;
             aux_code          <= 8'hA0;
+            aux_disp          <= 8'h00;
             glyph_aux         <= 8'hFF;
             prev_last         <= 1'b0;
         end else begin
@@ -176,6 +191,7 @@ module video_generator (
             if (sub_col == 4'd13 || h_cnt == 10'd79) begin
                 glyph_byte        <= char_rom_data;
                 char_code_display <= char_code;
+                aux_disp          <= aux_code;
                 prev_last         <= (h_cnt == 10'd79) ? 1'b0 : char_code_display[6];
             end
         end
@@ -213,13 +229,21 @@ module video_generator (
     // four at D043E5 / 30BD1B / 3095E5 / D06B1B, within a few counts of the lo-res palette.
     wire       hgr_cur   = char_code_display[dot_index];
     wire       hgr_left  = (dot_index == 3'd0) ? prev_last : char_code_display[dot_index - 3'd1];
-    wire       hgr_on    = (char_code_display[7] && !sub_col[0]) ? hgr_left : hgr_cur;
+    wire       hgr_on_std = (char_code_display[7] && !sub_col[0]) ? hgr_left : hgr_cur;
     // The sample one clock ahead: the next slot's first pixel at sub_col 13.
     wire [3:0] hgr_npos  = sub_col + 4'd1;
-    wire       hgr_next  = (sub_col == 4'd13)
+    wire       hgr_next_std = (sub_col == 4'd13)
                          ? (col_cnt != 6'd39 && (char_code[7] ? char_code_display[6] : char_code[0]))
                          : ((char_code_display[7] && !hgr_npos[0]) ? char_code_display[hgr_npos[3:1] - 3'd1]
                                                                    : char_code_display[hgr_npos[3:1]]);
+    // Double hi-res: the dot stream is the bits themselves, one sample per clock
+    // (aux byte bits 0..6, then main byte bits 0..6), so the same NTSC window applies.
+    wire [3:0] dh_nk     = sub_col + 4'd1;
+    wire       dh_cur    = right_half ? char_code_display[dot80[2:0]] : aux_disp[dot80[2:0]];
+    wire       dh_next   = (sub_col == 4'd13) ? (col_cnt != 6'd39 && aux_code[0])
+                         : (dh_nk >= 4'd7) ? char_code_display[dh_nk - 4'd7] : aux_disp[dh_nk[2:0]];
+    wire       hgr_on    = dh ? dh_cur  : hgr_on_std;
+    wire       hgr_next  = dh ? dh_next : hgr_next_std;
     reg  [1:0] hgr_hist; // s[n-1] in bit 0, s[n-2] in bit 1; zero outside the screen
     always @(posedge clk_pixel or posedge reset) begin
         if (reset) hgr_hist <= 2'b00;

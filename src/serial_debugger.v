@@ -12,6 +12,8 @@
 //   t  video and PLL status, w  dump the visible text page and, in mixed
 //      mode, the graphics page behind the bottom four lines
 //   h/?  help, x  CPU reset, CR  repeat the prompt
+//   a  toggle aux RAM view: m and w then read the aux 64 KB (the dump prints
+//      ';' after the address, and w sets bit 7 of its flags byte)
 //   0 1 4 8 f v  set the memory dump address ($0000 $0100 $0400 $0800
 //      $FA60 $FFF0) before m
 // 2. Hardware Debugger Mode (Toggle with Ctrl+B / ASCII 0x02):
@@ -46,6 +48,8 @@ module serial_debugger (
     // Memory Inspection Bus
     output reg  [15:0] dbg_mem_addr,
     input  wire [7:0]  dbg_mem_din,
+    input  wire        dbg_mem_ready,   // dbg_mem_din is valid (aux RAM answers slowly)
+    output reg         dbg_aux,         // read aux RAM instead of main
 
     // 65C02 CPU Registers & Bus Snooping
     input  wire [15:0] cpu_pc,
@@ -337,6 +341,7 @@ module serial_debugger (
             latched_ir     <= 8'h00;
             dump_addr      <= 16'hFA60;
             dbg_mem_addr   <= 16'hFA60;
+            dbg_aux        <= 1'b0;
             main_state     <= M_IDLE;
             return_job     <= M_IDLE;
             seq_step       <= 5'd0;
@@ -480,6 +485,14 @@ module serial_debugger (
                         cpu_rdy    <= 1'b1;
                         str_pos    <= STR_RESUME_START;
                         str_cnt    <= STR_RESUME_LEN;
+                        return_job <= M_IDLE;
+                        main_state <= M_STR;
+                    end
+
+                    "a", "A": begin
+                        dbg_aux    <= ~dbg_aux;
+                        str_pos    <= STR_PROMPT_START;
+                        str_cnt    <= STR_PROMPT_LEN;
                         return_job <= M_IDLE;
                         main_state <= M_STR;
                     end
@@ -709,7 +722,7 @@ module serial_debugger (
                             seq_step   <= 5'd3;
                             main_state <= M_HEX;
                         end
-                        5'd3: if (!tx_fifo_full) begin fifo_push(":"); seq_step <= 5'd4; end
+                        5'd3: if (!tx_fifo_full) begin fifo_push(dbg_aux ? ";" : ":"); seq_step <= 5'd4; end
                         5'd4: if (!tx_fifo_full) begin
                             fifo_push(" ");
                             mem_col  <= 4'd0;
@@ -720,7 +733,7 @@ module serial_debugger (
                             dbg_mem_addr <= dump_addr + {12'd0, mem_col};
                             if (mem_wait < 3'd4) begin
                                 mem_wait <= mem_wait + 1'b1;
-                            end else begin
+                            end else if (dbg_mem_ready) begin
                                 mem_row[mem_col] <= dbg_mem_din;
                                 mem_wait <= 3'd0;
                                 if (mem_col == 4'd15) begin
@@ -841,7 +854,7 @@ module serial_debugger (
                 M_SCREEN: begin
                     case (seq_step)
                         5'd0: begin // "\r\n$SS"
-                            scr_flags <= {2'b00, pll_locked, hires_mode, mixed_mode,
+                            scr_flags <= {dbg_aux, 1'b0, pll_locked, hires_mode, mixed_mode,
                                           page2, text_mode};
                             str_pos    <= STR_SCR_START;
                             str_cnt    <= STR_SCR_LEN;
@@ -876,7 +889,7 @@ module serial_debugger (
                                 dbg_mem_addr <= scr_addr;
                                 if (scr_wait < 3'd4) begin
                                     scr_wait <= scr_wait + 1'b1;
-                                end else begin
+                                end else if (dbg_mem_ready) begin
                                     scr_wait   <= 3'd0;
                                     scr_addr   <= scr_addr + 16'd1;
                                     scr_left   <= scr_left - 11'd1;
@@ -918,7 +931,7 @@ module serial_debugger (
                                 dbg_mem_addr <= scr_addr;
                                 if (scr_wait < 3'd4) begin
                                     scr_wait <= scr_wait + 1'b1;
-                                end else begin
+                                end else if (dbg_mem_ready) begin
                                     scr_wait   <= 3'd0;
                                     scr_addr   <= scr_addr + 16'd1;
                                     scr_left   <= scr_left - 11'd1;

@@ -22,6 +22,8 @@ module apple2_core (
     output reg         page2,
     output reg         hires_mode,
     output reg         col80,
+    output reg         altchar,
+    output reg         dhires,        // AN3 cleared ($C05E): double hi-res
     output reg         store80,
     input  wire        vbl,
 
@@ -47,6 +49,8 @@ module apple2_core (
     input  wire        cpu_rdy,
     input  wire [15:0] dbg_mem_addr,
     output wire [7:0]  dbg_mem_din,
+    input  wire        dbg_aux,        // debugger reads aux RAM
+    output wire        dbg_mem_ready,  // dbg_mem_din is valid
     output wire [15:0] debug_cpu_pc,
     output wire [15:0] debug_cpu_addr,
     output wire [7:0]  debug_cpu_dout,
@@ -126,7 +130,6 @@ module apple2_core (
     reg lc_read_ram;    // 1: Read LC RAM, 0: Read System ROM
     reg lc_write_ram;   // 1: Write LC RAM enabled
     reg lc_pre_write;   // Two successive reads required to enable write
-    reg altchar;        // 1: Alternate character set
     reg intcxrom;       // 1: Internal CX ROM ($C100-$CFFF) active
     reg slotc3rom;      // 1: slot 3 ROM at $C300 (0: internal 80-col firmware)
     reg intc8rom;       // 1: internal ROM at $C800-$CFFF (set by a $C3xx access)
@@ -141,6 +144,7 @@ module apple2_core (
             mixed_mode   <= 1'b0; // Default: Full screen
             page2        <= 1'b0; // Default: Page 1
             hires_mode   <= 1'b0; // Default: Lo-Res
+            dhires       <= 1'b0;
             lc_bank2     <= 1'b0;
             lc_read_ram  <= 1'b0; // Default: Read ROM ($D000-$FFFF)
             lc_write_ram <= 1'b0;
@@ -177,6 +181,7 @@ module apple2_core (
                         3'd1: mixed_mode <= cpu_addr[0]; // $C052/$C053: FULL / MIXED
                         3'd2: page2      <= cpu_addr[0]; // $C054/$C055: PAGE1 / PAGE2
                         3'd3: hires_mode <= cpu_addr[0]; // $C056/$C057: LORES / HIRES
+                        3'd7: dhires     <= ~cpu_addr[0]; // $C05E/$C05F: DHIRES on / off (AN3)
                         default: ;
                     endcase
                 end
@@ -238,14 +243,19 @@ module apple2_core (
     //   $D000-$FFFF language card RAM     ALTZP
     wire st_page = store80 && (cpu_addr[15:10] == 6'b000001 ||
                                (hires_mode && cpu_addr[15:13] == 3'b001));
-    wire aux_sel_rd = cpu_rdy && (cpu_addr < 16'h0200 ? altzp :
+    wire aux_sel_cpu_rd = cpu_rdy && (cpu_addr < 16'h0200 ? altzp :
                                   cpu_addr < 16'hC000 ? (st_page ? page2 : ramrd) :
                                   cpu_addr >= 16'hD000 ? (lc_read_ram && altzp) : 1'b0);
     wire aux_sel_wr = cpu_rdy && (cpu_addr < 16'h0200 ? altzp :
                                   cpu_addr < 16'hC000 ? (st_page ? page2 : ramwrt) :
                                   cpu_addr >= 16'hD000 ? (lc_write_ram && altzp) : 1'b0);
-    assign aux_rd_want = aux_sel_rd && !cpu_we;
-    wire   aux_stall   = (aux_rd_want && !aux_rd_hit) || (aux_sel_wr && cpu_we && aux_wr_busy);
+    // The debugger, while it holds the CPU, can read aux RAM instead of main
+    wire dbg_aux_sel = !cpu_rdy && dbg_aux &&
+                       (dbg_mem_addr < 16'hC000 || (dbg_mem_addr >= 16'hD000 && lc_read_ram));
+    wire aux_sel_rd    = aux_sel_cpu_rd || dbg_aux_sel;
+    assign aux_rd_want = (aux_sel_cpu_rd && !cpu_we) || dbg_aux_sel;
+    assign dbg_mem_ready = !dbg_aux_sel || aux_rd_hit;
+    wire   aux_stall   = (aux_sel_cpu_rd && !cpu_we && !aux_rd_hit) || (aux_sel_wr && cpu_we && aux_wr_busy);
     assign aux_wr_go   = cpu_go && cpu_we && aux_sel_wr;
     assign aux_wr_data = cpu_dout;
 

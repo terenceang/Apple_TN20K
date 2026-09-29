@@ -76,6 +76,8 @@ module top (
     wire        cpu_rdy;
     wire [15:0] dbg_mem_addr;
     wire [7:0]  dbg_mem_din;
+    wire        dbg_mem_ready;
+    wire        dbg_aux;
 
     wire [15:0] debug_cpu_pc;
     wire [15:0] debug_cpu_addr;
@@ -96,6 +98,8 @@ module top (
     wire        page2;
     wire        hires_mode;
     wire        col80;
+    wire        altchar;
+    wire        dhires;
     wire        store80;
     wire        vbl;
 
@@ -111,6 +115,8 @@ module top (
         .cpu_reset_req(cpu_reset_req),
         .dbg_mem_addr(dbg_mem_addr),
         .dbg_mem_din(dbg_mem_din),
+        .dbg_mem_ready(dbg_mem_ready),
+        .dbg_aux(dbg_aux),
         .cpu_pc(debug_cpu_pc),
         .cpu_a(debug_cpu_a),
         .cpu_x(debug_cpu_x),
@@ -198,6 +204,8 @@ module top (
         .page2(page2),
         .hires_mode(hires_mode),
         .col80(col80),
+        .altchar(altchar),
+        .dhires(dhires),
         .store80(store80),
         .vbl(vbl),
         .vram_req(vram_req),
@@ -212,6 +220,8 @@ module top (
         .cpu_rdy(cpu_rdy),
         .dbg_mem_addr(dbg_mem_addr),
         .dbg_mem_din(dbg_mem_din),
+        .dbg_mem_ready(dbg_mem_ready),
+        .dbg_aux(dbg_aux),
         .debug_cpu_pc(debug_cpu_pc),
         .debug_cpu_addr(debug_cpu_addr),
         .debug_cpu_dout(debug_cpu_dout),
@@ -258,6 +268,8 @@ module top (
         .page2(page2),
         .hires_mode(hires_mode),
         .col80(col80),
+        .altchar(altchar),
+        .dhires(dhires),
         .store80(store80),
         .aux_data(aux_line_data),
         .aux_col(aux_col),

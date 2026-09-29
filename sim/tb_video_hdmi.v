@@ -35,7 +35,8 @@ module tb_video_hdmi;
     reg bars  = 1'b0;                       // 0: Apple video, 1: colour bars
     reg text_mode = 1'b1, mixed_mode = 1'b0, page2 = 1'b0, hires_mode = 1'b0;
     reg hgr_phase = 1'b0;                   // expect Hi-Res (page 2, mixed) instead of text
-    reg col80 = 1'b0, store80 = 1'b0;
+    reg col80 = 1'b0, store80 = 1'b0, dhires = 1'b0, altchar = 1'b0;
+    reg dh_phase   = 1'b0;                  // expect double hi-res page 1
     reg wide_phase = 1'b0;                  // expect 80-column text (aux char first)
     reg skip      = 1'b0;                   // frame in which the mode changes: not checked
     reg [15:0] txt_base = 16'h0400;         // text page the model reads
@@ -57,7 +58,7 @@ module tb_video_hdmi;
         .clk_pixel(clk), .reset(!rst_n), .flash_clk(1'b0),
         .h_cnt(pixel_x + 10'd1), .v_cnt(pixel_y),
         .text_mode(text_mode), .mixed_mode(mixed_mode), .page2(page2), .hires_mode(hires_mode),
-        .col80(col80), .store80(store80), .aux_data(aux_data),
+        .col80(col80), .altchar(altchar), .dhires(dhires), .store80(store80), .aux_data(aux_data),
         .vram_req(vram_req), .vram_addr(vram_addr), .vram_data(vram_data),
         .char_rom_addr(char_rom_addr), .char_rom_data(char_rom_data),
         .red(vid_r), .green(vid_g), .blue(vid_b), .vbl(vbl)
@@ -121,7 +122,7 @@ module tb_video_hdmi;
                 gr  = ay % 8;
                 c   = ram[txt_base + row_base(row) + col];
                 // Character ROM address as the //e video ROM wiring (flash off)
-                a   = {1'b0, c[7], c[6] & c[7], c[5:0], gr[2:0]};
+                a   = {1'b0, c[7], c[6] & (c[7] | altchar), c[5:0], gr[2:0]};
                 g   = crom[a];
                 // A CLEAR bit in the character ROM is a lit dot: the 2732 is
                 // active-low. Normal glyphs are stored complemented (the 'A'
@@ -152,7 +153,7 @@ module tb_video_hdmi;
                 gr  = ay % 8;
                 c   = (d < 7) ? aux_ram[16'h0400 + row_base(row) + col]
                               : ram[16'h0400 + row_base(row) + col];
-                a   = {1'b0, c[7], c[6] & c[7], c[5:0], gr[2:0]};
+                a   = {1'b0, c[7], c[6] & (c[7] | altchar), c[5:0], gr[2:0]};
                 g   = crom[a];
                 expect_apple80 = ~g[(d < 7) ? d : d - 7] ? 24'h20E820 : 24'h020602;
             end
@@ -227,6 +228,54 @@ module tb_video_hdmi;
         end
     endfunction
 
+    // Double hi-res page 1: 560 one-clock dots per line, aux byte's bits 0..6
+    // then the main byte's, 14 per column; same NTSC window as expect_hgr.
+    function dhgr_sample;
+        input integer lbase, n;
+        integer c, d;
+        reg [7:0] b;
+        begin
+            if (n < 0 || n >= 560) dhgr_sample = 1'b0;
+            else begin
+                c = n / 14; d = n % 14;
+                b = (d < 7) ? aux_ram[16'h2000 + lbase + c] : ram[16'h2000 + lbase + c];
+                dhgr_sample = b[(d < 7) ? d : d - 7];
+            end
+        end
+    endfunction
+
+    function [23:0] expect_dhgr;
+        input integer x, y;
+        integer ay, lbase, n, m, ph, yy, ci, cq, cr, cg, cb;
+        reg s;
+        begin
+            ay = (y - 48) / 2;
+            if (x < 80 || x >= 640 || y < 48 || y >= 432) expect_dhgr = 24'h000000;
+            else begin
+                lbase = (ay % 8) * 1024 + ((ay / 8) % 8) * 128 + (ay / 64) * 40;
+                n = x - 80;
+                yy = 0; ci = 0; cq = 0;
+                for (m = n - 2; m <= n + 1; m = m + 1) begin
+                    s  = dhgr_sample(lbase, m);
+                    ph = (m + 4) % 4;
+                    if (s) begin
+                        yy = yy + 1;
+                        case (ph)
+                            0: ci = ci + 1;
+                            1: cq = cq + 1;
+                            2: ci = ci - 1;
+                            3: cq = cq - 1;
+                        endcase
+                    end
+                end
+                cr = clamp255(64 * yy + 80 * ci);
+                cg = clamp255(64 * yy - 41 * ci - 20 * cq);
+                cb = clamp255(64 * yy + 101 * cq);
+                expect_dhgr = {cr[7:0], cg[7:0], cb[7:0]};
+            end
+        end
+    endfunction
+
     function [23:0] expect_bars;
         input integer x, y;
         begin
@@ -265,6 +314,7 @@ module tb_video_hdmi;
         if (x >= 0) begin
             got  = {tmds_dec(s2), tmds_dec(s1), tmds_dec(s0)};
             want = bars ? expect_bars(x, y) : hgr_phase ? expect_hgr(x, y) :
+                   dh_phase ? expect_dhgr(x, y) :
                    wide_phase ? expect_apple80(x, y) : expect_apple(x, y);
             if (frame >= 1 && !skip && want !== 24'hxxxxxx) begin
                 checked = checked + 1;
@@ -370,6 +420,21 @@ module tb_video_hdmi;
                 arow[7] !== 8'hFF) begin
                 $display("FAIL: real ROM 'A' rows are %02h %02h %02h ... %02h, expected F7 EB .. C1 .. FF",
                          arow[0], arow[1], arow[2], arow[7]);
+                errors = errors + 1;
+            end
+            // ALTCHARSET reads the $200 block for $40-$7F (video_generator.v's
+            // char_rom_addr): $41 is MouseText, $61 an inverse lowercase 'a'
+            // (stored the inverse-half way round, so set bits are lit).
+            for (r = 0; r < 8; r = r + 1) arow[r] = realrom[{1'b0, 1'b0, 1'b1, 6'd1, r[2:0]}];
+            if (arow[0] !== 8'hEF || arow[3] !== 8'hBE || arow[7] !== 8'hC9) begin
+                $display("FAIL: real ROM alt $41 rows %02h .. %02h .. %02h, expected EF .. BE .. C9",
+                         arow[0], arow[3], arow[7]);
+                errors = errors + 1;
+            end
+            for (r = 0; r < 8; r = r + 1) arow[r] = realrom[{1'b0, 1'b0, 1'b1, 6'd33, r[2:0]}];
+            if (arow[2] !== 8'h1C || arow[3] !== 8'h20 || arow[4] !== 8'h3C) begin
+                $display("FAIL: real ROM alt $61 rows %02h %02h %02h, expected 1C 20 3C",
+                         arow[2], arow[3], arow[4]);
                 errors = errors + 1;
             end
         end
@@ -488,6 +553,40 @@ module tb_video_hdmi;
             errors = errors + 1;
         end
         $display("%0d 80-column pixels checked", checked - bars_checked);
+        // Double hi-res, page 1: 80COL + HIRES + AN3 cleared, graphics, no mixed.
+        // Main and aux hold different data, so a swapped or missing aux byte
+        // shows up as wrong dots.
+        bars_checked = checked;
+        for (i = 0; i < 8192; i = i + 1) begin
+            ram[16'h2000 + i]     = (i * 29) ^ (i >> 2) ^ 8'h31;
+            aux_ram[16'h2000 + i] = (i * 53) ^ (i >> 3) ^ 8'h4B;
+        end
+        skip = 1'b1; wide_phase = 1'b0; dh_phase = 1'b1;
+        text_mode = 1'b0; mixed_mode = 1'b0; hires_mode = 1'b1;
+        page2 = 1'b0; store80 = 1'b0; col80 = 1'b1; dhires = 1'b1;
+        wait (frame == 8);
+        skip = 1'b0;
+        wait (frame == 9);
+        if (checked - bars_checked < 720 * 480 - 4 || checked - bars_checked > 720 * 480 + 4) begin
+            $display("FAIL: checked %0d double hi-res pixels, expected about %0d",
+                     checked - bars_checked, 720 * 480);
+            errors = errors + 1;
+        end
+        $display("%0d double hi-res pixels checked", checked - bars_checked);
+        // ALTCHARSET on, 40 columns: $40-$7F read the $200 block instead of flashing.
+        bars_checked = checked;
+        skip = 1'b1; dh_phase = 1'b0; wide_phase = 1'b0;
+        text_mode = 1'b1; hires_mode = 1'b0; col80 = 1'b0; dhires = 1'b0; page2 = 1'b0;
+        altchar = 1'b1; txt_base = 16'h0400;
+        wait (frame == 10);
+        skip = 1'b0;
+        wait (frame == 11);
+        if (checked - bars_checked < 720 * 480 - 4 || checked - bars_checked > 720 * 480 + 4) begin
+            $display("FAIL: checked %0d ALTCHARSET pixels, expected about %0d",
+                     checked - bars_checked, 720 * 480);
+            errors = errors + 1;
+        end
+        $display("%0d ALTCHARSET pixels checked", checked - bars_checked);
         if (errors == 0) $display("tb_video_hdmi: PASS");
         else             $display("tb_video_hdmi: FAIL (%0d errors)", errors);
         $finish;
