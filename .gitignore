@@ -20,3 +20,9 @@ obj_dir/
 *~
 .DS_Store
 *:Zone.Identifier
+
+# Web front end (see web/README.md)
+/web/node_modules/
+/web/dist/
+# Built from roms/apple2e_char.hex, which is Apple copyright, same as above
+/web/src/generated/charset.json

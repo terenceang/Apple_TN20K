@@ -8,12 +8,37 @@ An Apple //e implemented in Verilog for the [Sipeed Tang Nano 20K](https://wiki.
 - **64 KB RAM** in block RAM, with a **language card** for $D000–$FFFF bank switching
 - **HDMI video** at 720×480p60 (CEA-861 VIC 2), with the 560×384 Apple display centered; text and lo-res modes, including mixed mode and page 2
 - **Audio** from the $C030 speaker toggle, sent both over HDMI (48 kHz L-PCM in data islands) and through the onboard MAX98357A I2S amplifier
-- **UART keyboard** at 115200 baud over the USB-C serial bridge (or a Bluetooth-to-UART module); ANSI arrow keys are mapped to Apple control codes
+- **UART keyboard** at 115200 baud over the USB-C serial bridge (or a Bluetooth-to-UART module); ANSI arrow keys are mapped to Apple control codes, and a three-byte key packet lets the Open-Apple and Solid-Apple keys drive the game paddles. There is a [browser front end](web/README.md) — keyboard, screen and debugger — in `web/`
 - **Gamepad over UART**: pushbuttons $C061–$C063 and paddles 0/1
 - **Built-in hardware debugger**: press Ctrl+B to freeze the CPU and inspect registers, single-step, or dump memory
 - **Diagnostic LEDs**: heartbeat, PLL lock, reset, CPU write, text mode, key strobe
 
 Not yet implemented: **hi-res** (the `HIRES` softswitch latches and reads back correctly at `$C01D`, but `video_generator` ignores it and always renders lo-res), auxiliary memory / 80-column display, peripheral slots, disk drives, and interrupts.
+
+## Web front end
+
+`web/` is a React app that puts the //e's keyboard, its text screen and its
+hardware debugger in the browser, over the same USB serial link. With the board
+plugged into the machine running the browser it needs **nothing installed**:
+Web Serial opens the port, and the app is just a static bundle. Chrome or Edge,
+served over https or localhost.
+
+```sh
+cd web && npm install && npm run build
+python3 -m http.server -d web/dist 8000   # http://localhost:8000
+```
+
+A WebSocket bridge is included for a board plugged into *another* machine, for
+browsers without Web Serial, and for the flash buttons:
+
+```sh
+make web-install web-build
+make bridge               # http://127.0.0.1:8781
+make web-test             # the keymap is an era check; see web/README.md
+```
+
+The screen is drawn from the same 2732 video ROM the FPGA reads, so it needs the
+ROM supplied first — see [`web/README.md`](web/README.md).
 
 ## Requirements
 
@@ -70,10 +95,18 @@ Press **Ctrl+B** to pause the CPU and enter the debugger. Press it again to leav
 |-----|------------------------------------------------|
 | `r` | Show CPU registers (PC, A, X, Y, SP, P, opcode) |
 | `s` | Single-step one instruction                    |
-| `c` | Continue execution                             |
+| `c` | Continue execution (also `g`)                  |
 | `m` | Dump 16 bytes of memory                        |
-| `t` | Show hardware status (softswitches, video, audio, clocks) |
-| `h` | Help                                           |
+| `4` | Point the dump at $0400 (also `0 1 8 f v`)     |
+| `t` | Show hardware status (video mode, PLL lock)    |
+| `w` | Dump the text page, and the graphics page in mixed mode |
+| `h` | Help (also `?`)                                |
+| `x` | Reset the CPU and show the registers           |
+
+Commands are only read when the debugger is idle, so anything sent before the
+previous command has finished printing is dropped. The banner prints two
+prompts; neither one alone means it is ready. `web/` waits for 200 ms of
+silence instead, which is why its buttons are reliable.
 
 ### Gamepad protocol
 
@@ -178,11 +211,12 @@ src/hdmi/               HDMI transmitter: timing, TMDS, data islands, audio/Info
 sim/                    iverilog testbenches (sim/run.sh)
 src/sound_generator.v   speaker to I2S
 src/input_controller.v  UART RX, keyboard, gamepad, $C0xx input registers
-src/serial_debugger.v   UART TX, console mirror, hardware debugger
+src/serial_debugger.v   UART TX, console mirror, hardware debugger, screen dump
 src/cpu/                65C02 core
 constraints/top.cst     pin assignments
 roms/                   ROM images (supply your own)
-scripts/                Deck-compatible build and programming scripts
+scripts/                Deck-compatible build, programming and bridge scripts
+web/                    React keyboard, screen and debugger (see web/README.md)
 ```
 
 ## License

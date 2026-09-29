@@ -19,6 +19,7 @@
 
 BUILD = scripts/build.sh
 PROG  = scripts/prog.sh
+BRIDGE = scripts/bridge.sh
 
 all: pack
 
@@ -42,4 +43,33 @@ flash:
 clean:
 	rm -rf build
 
-.PHONY: all synth pnr pack flash flash-sram clean
+# ============================================================================
+#  Web front end
+#
+#  `web/` is a Node project, separate from the FPGA build: `make web-build`
+#  produces the bundle the bridge serves, `make bridge` runs the bridge itself
+#  (scripts/bridge.sh, which is the only implementation), and `make web-test`
+#  runs the JS tests. The React app, the keymap and the screen renderer are in
+#  web/README.md.
+# ============================================================================
+
+web-install:
+	cd web && npm install
+
+web-build:
+	cd web && npm run build
+
+web-dev:
+	cd web && npm run dev
+
+web-test:
+	cd web && npm test
+
+web-charset:
+	cd web && npm run charset
+
+bridge:
+	$(BRIDGE)
+
+.PHONY: all synth pnr pack flash flash-sram clean \
+        web-install web-build web-dev web-test web-charset bridge
