@@ -33,6 +33,10 @@ module tb_video_hdmi;
 
     reg rst_n = 1'b0;
     reg bars  = 1'b0;                       // 0: Apple video, 1: colour bars
+    reg text_mode = 1'b1, mixed_mode = 1'b0, page2 = 1'b0, hires_mode = 1'b0;
+    reg hgr_phase = 1'b0;                   // expect Hi-Res (page 2, mixed) instead of text
+    reg skip      = 1'b0;                   // frame in which the mode changes: not checked
+    reg [15:0] txt_base = 16'h0400;         // text page the model reads
 
     // -----------------------------------------------------------------------
     // DUT wiring, as in src/top.v
@@ -49,7 +53,7 @@ module tb_video_hdmi;
     video_generator u_video (
         .clk_pixel(clk), .reset(!rst_n), .flash_clk(1'b0),
         .h_cnt(pixel_x + 10'd1), .v_cnt(pixel_y),
-        .text_mode(1'b1), .mixed_mode(1'b0), .page2(1'b0), .hires_mode(1'b0),
+        .text_mode(text_mode), .mixed_mode(mixed_mode), .page2(page2), .hires_mode(hires_mode),
         .vram_req(vram_req), .vram_addr(vram_addr), .vram_data(vram_data),
         .char_rom_addr(char_rom_addr), .char_rom_data(char_rom_data),
         .red(vid_r), .green(vid_g), .blue(vid_b), .vbl(vbl)
@@ -106,7 +110,7 @@ module tb_video_hdmi;
                 ay  = (y - 48) / 2;
                 row = ay / 8;
                 gr  = ay % 8;
-                c   = ram[16'h0400 + row_base(row) + col];
+                c   = ram[txt_base + row_base(row) + col];
                 // Character ROM address as the //e video ROM wiring (flash off)
                 a   = {1'b0, c[7], c[6] & c[7], c[5:0], gr[2:0]};
                 g   = crom[a];
@@ -117,6 +121,74 @@ module tb_video_hdmi;
                 // web/test/charset.test.js pins the same convention against the
                 // real 342-0265-A dump.
                 expect_apple = ~g[dot] ? 24'h20E820 : 24'h020602;
+            end
+        end
+    endfunction
+
+    // Hi-Res page 2: the 560-sample stream of the line at byte offset lbase,
+    // as the Apple's shift register emits it (7 dots per byte, 2 samples per
+    // dot; a byte with bit 7 set is delayed one sample, so its first sample
+    // repeats the previous dot). Zero outside 0..559.
+    function hgr_sample;
+        input integer lbase, n;
+        integer c, k, h;
+        reg     b7;
+        begin
+            if (n < 0 || n >= 560) hgr_sample = 1'b0;
+            else begin
+                c  = n / 14;
+                k  = (n % 14) / 2;
+                h  = n % 2;
+                b7 = ram[16'h4000 + lbase + c][7];
+                if (b7 && h == 0) begin
+                    // previous dot: same byte, or the last dot of the byte before
+                    if (k > 0)      hgr_sample = ram[16'h4000 + lbase + c][k - 1];
+                    else if (c > 0) hgr_sample = ram[16'h4000 + lbase + c - 1][6];
+                    else            hgr_sample = 1'b0;
+                end else begin
+                    hgr_sample = ram[16'h4000 + lbase + c][k];
+                end
+            end
+        end
+    endfunction
+
+    function integer clamp255;
+        input integer v;
+        clamp255 = (v < 0) ? 0 : (v > 255) ? 255 : v;
+    endfunction
+
+    // Expected colour: decode samples n-2..n+1 as an NTSC set would. Luma is
+    // 64 per lit sample; chroma I = s@ph0 - s@ph2, Q = s@ph1 - s@ph3 (ph =
+    // sample index mod 4); channel weights per video_generator.v.
+    function [23:0] expect_hgr;
+        input integer x, y;
+        integer ay, lbase, n, m, ph, yy, ci, cq, cr, cg, cb;
+        reg s;
+        begin
+            ay = (y - 48) / 2;
+            if (x < 80 || x >= 640 || y < 48 || y >= 432) expect_hgr = 24'h000000;
+            else if (ay >= 160)                            expect_hgr = expect_apple(x, y);
+            else begin
+                lbase = (ay % 8) * 1024 + ((ay / 8) % 8) * 128 + (ay / 64) * 40;
+                n = x - 80;
+                yy = 0; ci = 0; cq = 0;
+                for (m = n - 2; m <= n + 1; m = m + 1) begin
+                    s  = hgr_sample(lbase, m);
+                    ph = (m + 4) % 4;
+                    if (s) begin
+                        yy = yy + 1;
+                        case (ph)
+                            0: ci = ci + 1;
+                            1: cq = cq + 1;
+                            2: ci = ci - 1;
+                            3: cq = cq - 1;
+                        endcase
+                    end
+                end
+                cr = clamp255(64 * yy + 80 * ci);
+                cg = clamp255(64 * yy - 41 * ci - 20 * cq);
+                cb = clamp255(64 * yy + 101 * cq);
+                expect_hgr = {cr[7:0], cg[7:0], cb[7:0]};
             end
         end
     endfunction
@@ -158,8 +230,8 @@ module tb_video_hdmi;
 
         if (x >= 0) begin
             got  = {tmds_dec(s2), tmds_dec(s1), tmds_dec(s0)};
-            want = bars ? expect_bars(x, y) : expect_apple(x, y);
-            if (frame >= 1 && want !== 24'hxxxxxx) begin
+            want = bars ? expect_bars(x, y) : hgr_phase ? expect_hgr(x, y) : expect_apple(x, y);
+            if (frame >= 1 && !skip && want !== 24'hxxxxxx) begin
                 checked = checked + 1;
                 if (got !== want) begin
                     if (errors < 10)
@@ -271,7 +343,7 @@ module tb_video_hdmi;
     // -----------------------------------------------------------------------
     // Stimulus
     // -----------------------------------------------------------------------
-    integer i, frame_a_checked;
+    integer i, frame_a_checked, bars_checked;
     initial begin
         if (realrom_ok) check_real_rom();
         // Synthetic char ROM: every glyph row distinct, so a wrong address
@@ -283,6 +355,24 @@ module tb_video_hdmi;
         // Text page 1: distinct code per screen position.
         for (i = 0; i < 24 * 40; i = i + 1)
             ram[16'h0400 + row_base(i / 40) + (i % 40)] = (i * 7 + 3) & 8'hFF;
+
+        // Text page 2 and both HGR pages, distinct from text page 1.
+        for (i = 0; i < 24 * 40; i = i + 1)
+            ram[16'h0800 + row_base(i / 40) + (i % 40)] = (i * 11 + 5) & 8'hFF;
+        for (i = 0; i < 8192; i = i + 1) begin
+            ram[16'h2000 + i] = 8'hFF;
+            ram[16'h4000 + i] = (i * 37) ^ (i >> 3) ^ 8'h6D;
+        end
+
+        // Solid colour lines (page 2): 2A/55 is green, 2A/55 with bit 7 orange
+        // (AA/D5), D5/AA... and 7F/7F white. They are checked below against
+        // the palette, on top of the frame comparison against the model.
+        for (i = 0; i < 40; i = i + 1) begin
+            ram[16'h4000 + 3 * 1024 + i] = (i % 2) ? 8'h55 : 8'h2A;
+            ram[16'h4000 + 4 * 1024 + i] = (i % 2) ? 8'hD5 : 8'hAA;
+            ram[16'h4000 + 5 * 1024 + i] = (i % 2) ? 8'h2A : 8'h55;
+            ram[16'h4000 + 6 * 1024 + i] = 8'h7F;
+        end
 
         repeat (20) @(posedge clk);
         rst_n = 1'b1;
@@ -309,6 +399,41 @@ module tb_video_hdmi;
         end
         $display("%0d pixels checked (%0d Apple text, %0d colour bars)",
                  checked, frame_a_checked, checked - frame_a_checked);
+
+        // Hi-Res, page 2, mixed mode: the frame the switches change in is not
+        // checked (the pipeline is mid-flight); the next one is, in full.
+        // Page 1 HGR and text page 1 hold different data, so a wrong page
+        // shows up as wrong pixels.
+        bars_checked = checked;
+        skip = 1'b1; bars = 1'b0; hgr_phase = 1'b1;
+        text_mode = 1'b0; mixed_mode = 1'b1; page2 = 1'b1; hires_mode = 1'b1;
+        txt_base = 16'h0800;
+        wait (frame == 4);
+        skip = 1'b0;
+        wait (frame == 5);
+        if (checked - bars_checked < 720 * 480 - 4 || checked - bars_checked > 720 * 480 + 4) begin
+            $display("FAIL: checked %0d HGR pixels, expected about %0d",
+                     checked - bars_checked, 720 * 480);
+            errors = errors + 1;
+        end
+        $display("%0d Hi-Res pixels checked", checked - bars_checked);
+        // Interior of each solid line, away from its ends: the palette.
+        // (the model is exact per pixel; these pin its constants to real colours)
+        if (expect_hgr(80 + 14 * 10 + 4, 48 + 2 * 3) !== 24'h30BD1B ||   // green
+            expect_hgr(80 + 14 * 10 + 4, 48 + 2 * 5) !== 24'hD043E5 ||   // violet
+            expect_hgr(80 + 14 * 10 + 4, 48 + 2 * 6) !== 24'hFFFFFF) begin
+            $display("FAIL: solid HGR lines are %06h %06h %06h, expected 30BD1B D043E5 FFFFFF",
+                     expect_hgr(80 + 14 * 10 + 4, 48 + 2 * 3),
+                     expect_hgr(80 + 14 * 10 + 4, 48 + 2 * 5),
+                     expect_hgr(80 + 14 * 10 + 4, 48 + 2 * 6));
+            errors = errors + 1;
+        end
+        // bit 7 set: solid blue/orange, whichever sample phase the pixel is at
+        if (expect_hgr(80 + 14 * 10 + 4, 48 + 2 * 4) !== 24'hD06B1B &&
+            expect_hgr(80 + 14 * 10 + 4, 48 + 2 * 4) !== 24'h3095E5) begin
+            $display("FAIL: bit-7 HGR line is %06h", expect_hgr(80 + 14 * 10 + 4, 48 + 2 * 4));
+            errors = errors + 1;
+        end
         if (errors == 0) $display("tb_video_hdmi: PASS");
         else             $display("tb_video_hdmi: FAIL (%0d errors)", errors);
         $finish;

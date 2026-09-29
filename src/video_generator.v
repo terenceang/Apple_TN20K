@@ -92,7 +92,14 @@ module video_generator (
                                    (text_row[4:3] == 2'd2) ? 7'd80 : 7'd0;
     wire [9:0]  row_offset       = {text_row[2:0], 7'd0} + {3'd0, row_group_offset};
     wire [15:0] base_page        = page2 ? 16'h0800 : 16'h0400;
-    assign vram_addr             = base_page + {6'd0, row_offset} + {10'd0, fetch_col};
+    wire [15:0] text_addr        = base_page + {6'd0, row_offset} + {10'd0, fetch_col};
+
+    // Hi-Res: 8 interleaved lines 0x400 apart, then the same 128/40-byte
+    // row grouping as text (a2_y[5:3] == text_row[2:0], a2_y[7:6] == text_row[4:3]).
+    wire        is_text_line     = text_mode || (mixed_mode && (text_row >= 5'd20));
+    wire [15:0] hgr_base         = page2 ? 16'h4000 : 16'h2000;
+    wire [15:0] hgr_addr         = hgr_base + {3'd0, glyph_row, 10'd0} + {6'd0, row_offset} + {10'd0, fetch_col};
+    assign vram_addr             = (hires_mode && !is_text_line) ? hgr_addr : text_addr;
 
     // Request RAM access during prefetch cycles only (1 cycle per character column + 1 cycle before col 0)
     assign vram_req = in_apple_y && ((in_apple_x && (sub_col == 4'd9)) || (h_cnt == 10'd75));
@@ -101,6 +108,7 @@ module video_generator (
     reg [7:0] char_code;
     reg [7:0] char_code_display;
     reg [7:0] glyph_byte;
+    reg       prev_last; // last dot of the previous HGR byte (0 at column 0)
 
     // Character ROM address lookup
     assign char_rom_addr = {
@@ -122,6 +130,7 @@ module video_generator (
             char_code         <= 8'hA0; // space
             char_code_display <= 8'hA0;
             glyph_byte        <= 8'h00;
+            prev_last         <= 1'b0;
         end else begin
             if (sub_col == 4'd11 || h_cnt == 10'd77) begin
                 char_code <= vram_data;
@@ -129,6 +138,7 @@ module video_generator (
             if (sub_col == 4'd13 || h_cnt == 10'd79) begin
                 glyph_byte        <= char_rom_data;
                 char_code_display <= char_code;
+                prev_last         <= (h_cnt == 10'd79) ? 1'b0 : char_code_display[6];
             end
         end
     end
@@ -145,8 +155,61 @@ module video_generator (
     // web/src/charset.js reproduces this, so the browser and HDMI agree.
     wire pixel_on = ~glyph_byte[dot_index];
 
+    // Hi-Res dot stream. char_code_display is the byte on screen (bit 0 is the
+    // leftmost dot, bit 7 the palette/delay bit); char_code already holds the
+    // next byte from sub_col 12, which is all dot 6's right neighbour needs.
+    // A delayed byte (bit 7) shifts its pixels right by one clock, half a dot.
+    //
+    // Colour is what an NTSC set makes of that 560-sample stream. One colour
+    // subcarrier cycle is 4 samples, so the pixel is decoded from the window
+    // s[n-2..n+1]: luma is the number of lit samples, chroma is
+    //   I = s@phase0 - s@phase2,   Q = s@phase1 - s@phase3
+    // with the phase of sample m = m mod 4. 1100 (even dots) is violet, 0011
+    // green, and the one-sample shift of a delayed byte turns them into blue
+    // and orange; 1111 is white and a 0101 dot pattern fills solid, as on a TV.
+    // The channel constants (64/unit of luma, then I and Q terms) put those
+    // four at D043E5 / 30BD1B / 3095E5 / D06B1B, within a few counts of the lo-res palette.
+    wire       hgr_cur   = char_code_display[dot_index];
+    wire       hgr_left  = (dot_index == 3'd0) ? prev_last : char_code_display[dot_index - 3'd1];
+    wire       hgr_on    = (char_code_display[7] && !sub_col[0]) ? hgr_left : hgr_cur;
+    // The sample one clock ahead: the next slot's first pixel at sub_col 13.
+    wire [3:0] hgr_npos  = sub_col + 4'd1;
+    wire       hgr_next  = (sub_col == 4'd13)
+                         ? (col_cnt != 6'd39 && (char_code[7] ? char_code_display[6] : char_code[0]))
+                         : ((char_code_display[7] && !hgr_npos[0]) ? char_code_display[hgr_npos[3:1] - 3'd1]
+                                                                   : char_code_display[hgr_npos[3:1]]);
+    reg  [1:0] hgr_hist; // s[n-1] in bit 0, s[n-2] in bit 1; zero outside the screen
+    always @(posedge clk_pixel or posedge reset) begin
+        if (reset) hgr_hist <= 2'b00;
+        else       hgr_hist <= in_apple_x ? {hgr_hist[0], hgr_on} : 2'b00;
+    end
+
+    // Phase of pixel n: 14 * col + sub_col mod 4.
+    wire [1:0] hgr_ph = {col_cnt[0], 1'b0} + sub_col[1:0];
+    function integer chroma_i(input s, input [1:0] q);
+        chroma_i = !s ? 0 : (q == 2'd0) ? 1 : (q == 2'd2) ? -1 : 0;
+    endfunction
+    function integer chroma_q(input s, input [1:0] q);
+        chroma_q = !s ? 0 : (q == 2'd1) ? 1 : (q == 2'd3) ? -1 : 0;
+    endfunction
+    function [7:0] clamp8(input integer v);
+        clamp8 = (v < 0) ? 8'd0 : (v > 255) ? 8'd255 : v[7:0];
+    endfunction
+
+    reg [7:0] hgr_r, hgr_g, hgr_b;
+    integer   hgr_y, hgr_ci, hgr_cq;
+    always @(*) begin
+        hgr_y  = hgr_hist[1] + hgr_hist[0] + hgr_on + hgr_next;
+        hgr_ci = chroma_i(hgr_hist[1], hgr_ph + 2'd2) + chroma_i(hgr_hist[0], hgr_ph + 2'd3)
+               + chroma_i(hgr_on,      hgr_ph)        + chroma_i(hgr_next,    hgr_ph + 2'd1);
+        hgr_cq = chroma_q(hgr_hist[1], hgr_ph + 2'd2) + chroma_q(hgr_hist[0], hgr_ph + 2'd3)
+               + chroma_q(hgr_on,      hgr_ph)        + chroma_q(hgr_next,    hgr_ph + 2'd1);
+        hgr_r  = clamp8(64 * hgr_y + 80 * hgr_ci);
+        hgr_g  = clamp8(64 * hgr_y - 41 * hgr_ci - 20 * hgr_cq);
+        hgr_b  = clamp8(64 * hgr_y + 101 * hgr_cq);
+    end
+
     // Lo-Res graphics support:
-    wire is_text_line = text_mode || (mixed_mode && (text_row >= 5'd20));
     wire [3:0] lores_color_idx = glyph_row[2] ? char_code_display[7:4] : char_code_display[3:0];
 
     // Lo-Res 16-color RGB palette
@@ -185,6 +248,10 @@ module video_generator (
                     red   <= pixel_on ? 8'h20 : 8'h02;
                     green <= pixel_on ? 8'hE8 : 8'h06;
                     blue  <= pixel_on ? 8'h20 : 8'h02;
+                end else if (hires_mode) begin
+                    red   <= hgr_r;
+                    green <= hgr_g;
+                    blue  <= hgr_b;
                 end else begin
                     // Lo-Res graphics color
                     red   <= lores_r;
