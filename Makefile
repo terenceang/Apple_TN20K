@@ -1,46 +1,46 @@
 # ============================================================================
-#  Thin wrapper around scripts/build.sh and scripts/prog.sh.
+#  Thin wrapper around scripts/build.ps1 and scripts/prog.ps1.
 #
-#  There is deliberately no build logic here.  This used to carry its own
-#  SRCS list, its own nextpnr flags and its own output paths, which had
-#  drifted from scripts/build.sh (the OpenFPGA Deck path) enough that the two
-#  produced different netlists and applied different timing rules.  Now both
-#  go through one implementation:
-#
-#      scripts/build.sh   synth_gowin -> nextpnr -> gowin_pack
-#      scripts/prog.sh    openFPGALoader
-#
-#  The RTL file list lives in fpga.yaml and is read by scripts/sources.sh.
-#  Timing target and mode constants live in src/hdmi/hdmi_defs.vh.
+#  There is deliberately no build logic here.  The RTL file list lives in
+#  fpga.yaml and is read by scripts/sources.ps1.  Timing target and mode
+#  constants live in src/hdmi/hdmi_defs.vh.
 #
 #  Everything is re-run from scratch on each invocation, so the individual
-#  stages are how you iterate: build.sh --synth, then --pnr, then --pack.
+#  stages are how you iterate:
+#    make synth   (scripts/build.ps1 -Synth)
+#    make pnr     (scripts/build.ps1 -Pnr)
+#    make pack    (scripts/build.ps1 -Pack)
+#
+#  Scripts require a native Windows OSS CAD Suite install.  Point
+#  $env:OSS_CAD_SUITE at the suite root, or let VS Code's
+#  "openfpga.toolchain.path" setting be discovered automatically.
 # ============================================================================
 
-BUILD = scripts/build.sh
-PROG  = scripts/prog.sh
+PWSH  = C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -ExecutionPolicy Bypass
+BUILD = scripts/build.ps1
+PROG  = scripts/prog.ps1
 
 all: pack
 
 synth:
-	$(BUILD) --synth
+	$(PWSH) -File $(BUILD) -Synth
 
 pnr:
-	$(BUILD) --pnr
+	$(PWSH) -File $(BUILD) -Pnr
 
 pack:
-	$(BUILD)
+	$(PWSH) -File $(BUILD)
 
 # Load into SRAM: fast, lost on power cycle.  This is the iteration path.
 flash-sram:
-	$(PROG)
+	$(PWSH) -File $(PROG)
 
 # Write the configuration flash: persistent across power cycles.
 flash:
-	$(PROG) --flash
+	$(PWSH) -File $(PROG) -Flash
 
 clean:
-	rm -rf build
+	if exist build rmdir /s /q build
 
 # ============================================================================
 #  Web front end
