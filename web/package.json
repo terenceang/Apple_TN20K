@@ -11,6 +11,8 @@
     "bridge": "node bridge/bridge.mjs",
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
+    "pages": "node scripts/pages.mjs",
+    "pages:check": "node scripts/pages.mjs --check",
     "preview": "vite preview",
     "charset": "node scripts/charset.mjs",
     "test": "node --test test/*.test.js"

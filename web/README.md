@@ -74,15 +74,43 @@ whatever was typed into the box, `VITE_WS` if it was set at build time, then
 the page's own address — which is right when the bridge is serving the app
 itself.
 
-### Hosting the page on GitHub Pages with the bridge
+### Hosting the page on GitHub Pages
 
-The **page** is static and can live anywhere; the **bridge cannot**, because it
+The **page** is static and can live anywhere. The **bridge cannot**, because it
 holds `/dev/ttyUSB0` and so has to run on the machine the board is plugged
-into. Pages hosts the app, the bridge stays home, and the app dials it. Set
+into — Pages hosts the app, the bridge stays home, and the app dials it. Set
 `VITE_WS=ws://127.0.0.1:8781/ws` at build time so it knows where to look.
 
-GitHub Pages will not run the build itself unless you add a workflow; the
-bundle has to be committed or built in CI first.
+```sh
+cd web
+npm run pages        # build, check, copy into ../docs/web
+```
+
+`docs/web/`, because this repo's `/docs` already holds the board
+documentation — Sipeed's datasheet and schematics — which is tracked and which
+a deploy must not touch. The site lands at
+`https://<owner>.github.io/<repo>/web/`, and `npm run pages` prints the URL.
+
+Pages will not run the build itself unless you add a workflow, so the output
+is committed:
+
+```sh
+git add docs/web && git commit -m "Publish the web front end" && git push
+```
+
+Then set **Settings → Pages → Source** to *Deploy from a branch*, branch
+`main`, folder `/docs`. A project site is served from `/<repo>/`, which is why
+the published build uses relative asset paths — absolute ones would 404.
+
+**The published bundle contains no character ROM.** `charset.js` imports
+`generated/charset.json` and Vite inlines it, so a build made after
+`npm run charset` carries all 4096 bytes of Apple's 2732 — and a Pages site is
+public the moment it is published, which is the same reason `roms/*.hex` is
+gitignored. `npm run pages` swaps that import for a stub, so the published
+screen pane shows text rather than the real //e glyphs and says so; a local
+build still has them. `scripts/pages.mjs` checks the built output for the ROM
+and **refuses to copy** if it is there anyway, and the check is verified to
+fail when the swap is disabled.
 
 A loopback URL counts as *potentially trustworthy* in the URL standard, so
 `ws://127.0.0.1` from an `https://` page is not mixed content and browsers
@@ -114,7 +142,9 @@ make web-charset
 
 Without it the app still works; the screen falls back to showing text instead of
 pixels and says so. `web/src/generated/charset.json` is gitignored for the same
-reason `roms/*.hex` is.
+reason `roms/*.hex` is, and a build made after `npm run charset` has the ROM
+compiled into the bundle — so `npm run pages` deliberately leaves it out. A
+local build has the real glyphs; a published one does not.
 
 ## The wire protocol
 
@@ -207,6 +237,7 @@ src/
   components/       Keyboard, Console, Screen, DebuggerPane, Gamepad, FlashBar
 bridge/bridge.mjs   serial <-> WebSocket, port probe, origin policy, flash job
 scripts/charset.mjs roms/apple2e_char.hex -> src/generated/charset.json
+scripts/pages.mjs   build the Pages bundle, check it, copy to docs/web
 test/               node --test
 ```
 

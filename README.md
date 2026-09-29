@@ -28,6 +28,11 @@ cd web && npm install && npm run build
 python3 -m http.server -d web/dist 8000   # http://localhost:8000
 ```
 
+To publish it: `cd web && npm run pages`, which builds without the Apple
+character ROM, checks that it really is not in there, and copies the result to
+`docs/web/`. Commit that and set **Settings &rarr; Pages** to serve `/docs`
+from `main`.
+
 A WebSocket bridge is included for a board plugged into *another* machine, for
 browsers without Web Serial, and for the flash buttons:
 
