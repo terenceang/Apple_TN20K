@@ -93,6 +93,7 @@ module disk2_store (
     input  wire [17:0] up_addr,
     input  wire [7:0]  up_data,
     input  wire        up_last,       // this is the drive's last byte
+    input  wire        up_bad,        // ...or it was not, and the drive is not
     output reg         up_busy,       // the store is holding this byte
     output reg         up_done,       // ...and has taken it
     input  wire        down_go,       // serve the byte at down_addr
@@ -425,7 +426,13 @@ module disk2_store (
                         // image, so an upload that is cut short leaves the drive
                         // reading as empty -- and an empty drive is write
                         // protected, so the half-written image cannot be booted.
+                        // up_bad is the other end of the same thing: the debugger
+                        // counts what arrived and what it took, and if those
+                        // differ then bytes were dropped in the middle and the
+                        // image is not merely absent but wrong, which is worse.
+                        // A drive that has an image is one DOS will boot.
                         if (up_last) present[up_drive] <= 1'b1;
+                        if (up_bad)  present[up_drive] <= 1'b0;
                         if (up_have) begin
                             dsk_we    <= 1'b1;
                             // Which half of the word each byte goes in is its own

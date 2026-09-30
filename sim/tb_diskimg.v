@@ -45,11 +45,23 @@ module tb_diskimg;
     wire [7:0] dbg_mem_din;
     wire [15:0] dbg_mem_addr;
     wire       img_up_go, img_up_drive, img_up_last, img_up_busy, img_up_done;
+    wire       img_up_bad;
     wire [17:0] img_up_addr;
     wire [7:0]  img_up_data;
     wire       img_dn_go, img_dn_drive, img_dn_last, img_dn_valid, img_dn_done;
     wire [17:0] img_dn_addr;
     wire [7:0]  img_dn_data;
+
+    // The bench's own connection to the store's upload port, for the direct
+    // tests.  Declared here, before the store that is wired to them, because
+    // Icarus will not bind a port expression to something declared later.  The
+    // debugger drives the same pins, and its outputs are all zero while it is
+    // idle, so plain ORs and muxes are enough to share them.
+    reg         b_up_go = 1'b0;
+    reg         b_up_drive = 1'b0;
+    reg  [17:0] b_up_addr = 18'd0;
+    reg  [7:0]  b_up_data = 8'h00;
+    reg         b_up_last = 1'b0;
 
     // A CPU that never runs, which is what a paused machine looks like to the
     // debugger.  The registers are only read back by the r command.
@@ -143,8 +155,15 @@ module tb_diskimg;
         .wr_seen(1'b0), .wr_byte(8'h00), .wr_in_data(1'b0), .wr_off(9'd0),
         .wr_sec(4'd0), .wr_track(9'd0), .wr_drive(1'b0),
         .drv_present(drv_present), .drv_writable(drv_writable),
-        .up_go(img_up_go), .up_drive(img_up_drive), .up_addr(img_up_addr),
-        .up_data(img_up_data), .up_last(img_up_last),
+        // The debugger and the bench share the upload port.  The debugger's
+        // outputs are all zero while it is idle, which is whenever the bench is
+        // driving, so the ORs have one driver each in practice.
+        .up_go(img_up_go | b_up_go),
+        .up_drive(b_up_go ? b_up_drive : img_up_drive),
+        .up_addr(b_up_go ? b_up_addr : img_up_addr),
+        .up_data(b_up_go ? b_up_data : img_up_data),
+        .up_last(img_up_last | b_up_last),
+        .up_bad(img_up_bad),
         .up_busy(img_up_busy), .up_done(img_up_done),
         .down_go(img_dn_go), .down_drive(img_dn_drive), .down_addr(img_dn_addr),
         .down_last(img_dn_last), .down_data(img_dn_data),
@@ -187,6 +206,15 @@ module tb_diskimg;
         end
     endfunction
 
+    // One byte, then a pause.  The pause is not the wire's 234 clocks: that makes
+    // a whole image 33 million clocks of simulated time, and what is under test
+    // here is the path from the debugger to the store, not the UART, which
+    // tb_input already drives with real bit timings.  Twenty clocks a byte is
+    // still slower than the debugger, whose intake is take-then-offer-then-wait
+    // and whose store blocks for a word write every second byte, so nothing is
+    // dropped -- and if the pacing were too fast the transfer would end in
+    // "lost" rather than "done" and expect_str below would say so, so a wrong
+    // guess fails the test instead of quietly corrupting an image.
     task send(input [7:0] b);
         begin
             @(negedge clk);
@@ -194,13 +222,14 @@ module tb_diskimg;
             rx_valid = 1'b1;
             @(negedge clk);
             rx_valid = 1'b0;
+            repeat (18) @(posedge clk);
         end
     endtask
 
     task send_cmd(input [7:0] b);
         begin
+            wait_quiet(4000);      // the board has to be idle to read it
             send(b);
-            repeat (4000) @(posedge clk);
         end
     endtask
 
@@ -235,6 +264,9 @@ module tb_diskimg;
         rx_byte_task(drain_b);
         q[q_wr % 65536] = drain_b;
         q_wr = q_wr + 1;
+`ifdef DBG_DRAIN
+        if (q_wr < 60) $write("%c", drain_b);
+`endif
     end
 
     task getbyte(output [7:0] b);
@@ -245,13 +277,23 @@ module tb_diskimg;
         end
     endtask
 
+    // A string literal passed to a vector argument is left-aligned, so character
+    // n is in the byte at the *top* end counting down, not at the bottom end
+    // counting up: s[8*n +: 8] is the padding.  Everything below asks for
+    // characters through here so that mistake is made once.
+    function [7:0] chr(input [8*16-1:0] s, input integer n);
+        begin
+            chr = s[8*(16 - 1 - n) +: 8];
+        end
+    endfunction
+
     // Throw bytes away until this string has been seen.  Matching the text is
     // what makes this independent of however much the debugger said beforehand.
     task skip_until(input [8*16-1:0] s);
         integer k;
         begin
             slen = 0;
-            while (slen < 16 && s[8*slen +: 8] !== 8'h00) slen = slen + 1;
+            while (slen < 16 && chr(s, slen) !== 8'h00) slen = slen + 1;
             for (k = 0; k < 16; k = k + 1) skipbuf[k] = 8'h00;
             forever begin
                 getbyte(gotb);
@@ -259,7 +301,7 @@ module tb_diskimg;
                 skipbuf[0] = gotb;
                 match = 1;
                 for (k = 0; k < slen; k = k + 1)
-                    if (skipbuf[k] !== s[8*(slen - 1 - k) +: 8]) match = 0;
+                    if (skipbuf[k] !== chr(s, slen - 1 - k)) match = 0;
                 if (match) disable skip_until;
             end
         end
@@ -270,12 +312,12 @@ module tb_diskimg;
         integer n;
         begin
             n = 0;
-            while (n < 16 && s[8*n +: 8] !== 8'h00) begin
+            while (n < 16 && chr(s, n) !== 8'h00) begin
                 getbyte(gotb);
-                if (gotb !== s[8*n +: 8]) begin
+                if (gotb !== chr(s, n)) begin
                     fails = fails + 1;
                     $display("FAIL: expected %02x, got %02x, at %0d of the string",
-                             s[8*n +: 8], gotb, n);
+                             chr(s, n), gotb, n);
                 end
                 checks = checks + 1;
                 n = n + 1;
@@ -292,37 +334,56 @@ module tb_diskimg;
         end
     endtask
 
-    // An upload, the way a host has to do it: two bytes in, one acknowledgement
-    // out, with a window of bytes in flight so the link is never idle waiting for
-    // a round trip.  The window is the whole protocol: the board has room for one
-    // byte in hand, so a host that ignores the acks and blasts the file has its
-    // bytes dropped in the middle and ends up with an image the board believes in.
+    // Wait until the board has said nothing for a while.  This is what the web
+    // app's 200 ms of silence is for, and it is not optional: the debugger reads
+    // a command only while it is idle, and after Ctrl+B it prints a banner, two
+    // prompts and a register line, which at 115200 is four milliseconds of
+    // talking.  A command sent into the middle of that is dropped without a word.
+    task wait_quiet(input integer usec);
+        integer seen;
+        begin
+            forever begin
+                seen = q_wr;
+                #(usec * 1000);
+                if (q_wr == seen) disable wait_quiet;
+            end
+        end
+    endtask
+
+    // An upload, the way a host has to do it: one track in, one acknowledgement
+    // out, 35 times.
+    //
+    // The track pacing is only safe because the host is also slower than the
+    // store.  A host that is not gets its bytes dropped in the middle, which the
+    // board notices by counting what arrived against what it took and answers
+    // with "lost" rather than "done": the image is wrong, not absent, and a
+    // drive with an image is one DOS will boot.  That case is checked later with
+    // a host that offers bytes as fast as it can.
     task upload(input integer drive, input integer count, input [7:0] xor_mask);
         begin
+            // The letter and the digit are two command bytes, each read on its
+            // own visit to idle, so each waits for the board to go quiet.
             send_cmd("d");
             send_cmd(drive == 0 ? "1" : "2");
             skip_until("UPLOAD");
             skip_to_eol;
-            outstanding = 0;
             for (i = 0; i < count; i = i + 1) begin
                 send(pat(i) ^ xor_mask);
-                outstanding = outstanding + 1;
-                while (outstanding >= WINDOW) begin
-                    getbyte(gotb);
-                    if (gotb === 8'h06) begin
-                        outstanding = outstanding - 2;
-                        acks        = acks + 1;
+                if (i[11:0] == 12'hFFE)
+                    $display("  sent %0d, acks %0d, board has %0d, st=%0d have=%b sent=%b busy=%b | store st=%0d have=%b busy=%b q=%0d",
+                             i + 1, acks, u_dbg.img_addr, u_dbg.main_state,
+                             u_dbg.img_have, u_dbg.img_sent, img_up_busy,
+                             u_store.state, u_store.up_have, u_store.up_busy,
+                             q_wr - q_rd);
+                // A track's last byte, and so the byte the board acknowledges.
+                if (i[11:0] == 12'hFFF) begin : wait_ack
+                    forever begin
+                        getbyte(gotb);
+                        if (gotb === 8'h06) begin
+                            acks = acks + 1;
+                            disable wait_ack;
+                        end
                     end
-                end
-            end
-            // The acknowledgements for the bytes still in the window.  There is
-            // one for every two bytes sent, so with an even number of bytes this
-            // ends on zero.
-            while (outstanding > 0) begin
-                getbyte(gotb);
-                if (gotb === 8'h06) begin
-                    outstanding = outstanding - 2;
-                    acks        = acks + 1;
                 end
             end
             expect_str("\r\ndone\r\n");
@@ -332,6 +393,47 @@ module tb_diskimg;
     // ------------------------------------------------------------------
     // The tests
     // ------------------------------------------------------------------
+    //
+    // A whole image over the wire at 115200 is 335 million clocks of simulated
+    // time, which is minutes of wall clock, so the wire tests are kept short and
+    // full-image coverage is got a different way: the store's upload port is
+    // driven directly, one byte every three clocks, which is the same port the
+    // debugger drives and the same SDRAM under it, and it is what checks the
+    // addressing across the whole 143,360 bytes.  What the wire is kept for is
+    // the protocol: the banner, the track acknowledgements, the done and lost
+    // answers, and the order a download comes back in.
+
+    // One byte straight into the store, at whatever pace the bench likes.  The
+    // handshake is the store's: up_go while it is not busy, up_done to say the
+    // byte was taken.
+    task store_put(input drive, input integer n);
+        integer w;
+        begin
+            b_up_drive = drive;
+            b_up_addr  = n[17:0];
+            b_up_data  = pat2(n);
+            b_up_last  = (n == IMG_BYTES - 1);
+            while (img_up_busy) @(posedge clk);
+            @(negedge clk);
+            b_up_go = 1'b1;
+            @(negedge clk);
+            b_up_go = 1'b0;
+            w = 0;
+            while (!img_up_done && w < 16) begin
+                @(posedge clk);
+                w = w + 1;
+            end
+        end
+    endtask
+
+    // The second pattern, so a check can tell the direct upload's image from the
+    // debugger upload's one in the same SDRAM.
+    function [7:0] pat2(input integer n);
+        begin
+            pat2 = ((n * 8'h2B) ^ (n[13:8] + n[7:0]) ^ 8'h5C) & 8'hFF;
+        end
+    endfunction
+
     initial begin
         reset = 1'b1;
         rx_byte = 8'h00;
@@ -346,6 +448,7 @@ module tb_diskimg;
         send_cmd(8'h02);
         check(dbg_mode === 1'b1, "Ctrl+B entered the debugger");
         skip_until("Debugger");
+        $display("phase 1: in the debugger, drives empty");
 
         // Before anything is uploaded, neither drive holds an image, so both read
         // as write protected: this is what stops a format going nowhere.
@@ -353,12 +456,13 @@ module tb_diskimg;
         check(drv_writable === 2'b00, "an empty drive is write protected");
 
         // ==============================================================
-        // 2. A whole image into drive 2
+        // 2. A whole image into drive 2 over the wire
         // ==============================================================
         acks = 0;
         upload(1, IMG_BYTES, 8'h00);
+        $display("phase 2: full image uploaded over the wire");
 
-        check(acks == IMG_BYTES / 2, "one acknowledgement for every two bytes sent");
+        check(acks == IMG_BYTES / 4096, "one acknowledgement for every track sent");
         check(drv_present[1] === 1'b1, "drive 2 holds an image after a full upload");
         check(drv_present[0] === 1'b0, "an upload to drive 2 does not fill drive 1");
         check(drv_writable[1] === 1'b1, "a drive with an image is writable");
@@ -379,53 +483,83 @@ module tb_diskimg;
         check(bad == 0, "an upload to drive 2 does not spill into drive 1");
 
         // ==============================================================
-        // 3. Download it again and compare with what went in
+        // 3. The first bytes of a download, in order
         // ==============================================================
-        // A download is 143,360 bytes out of the pin at 115200, which is 2,340
-        // clocks a byte -- 335 million of them.  So the wire check covers the
-        // first DL_BYTES of the image rather than all of it, and the whole image's
-        // contents are checked above, through the SDRAM.  What the wire is here
-        // for is the *order*: the store's word cache, and which half of a word it
-        // takes the byte from, only show up on the way out.
+        // What the wire is here for is the *order*: the store's word cache, and
+        // which half of a word it takes the byte from, only show up on the way
+        // out.  512 bytes is 256 words, which is plenty of both and 1.2 million
+        // clocks rather than the 335 million a whole image costs.
         send_cmd("e2");
         skip_until("DOWNLOAD");
         skip_to_eol;
+        $display("phase 3: download started");
         bad = 0;
-        for (i = 0; i < DL_BYTES; i = i + 1) begin
+        for (i = 0; i < 512; i = i + 1) begin
             getbyte(gotb);
             if (gotb !== pat(i)) bad = bad + 1;
         end
-        check(bad == 0, "the download gives back the image that was uploaded");
+        check(bad == 0, "the download gives back the image in order");
+
+        // The transfer is still running, and there is no way to stop it: reset,
+        // which is also what a host that has given up leaves the board needing.
+        reset = 1'b1;
+        repeat (8) @(posedge clk);
+        reset = 1'b0;
+        repeat (8) @(posedge clk);
+        send_cmd(8'h02);
+        skip_until("Debugger");
 
         // ==============================================================
-        // 4. A cut-short upload must not leave a usable drive
+        // 4. A host that sends faster than the board can take
         // ==============================================================
-        // Checked on drive 1, which is still empty: a link that drops half way
-        // through has to leave a drive that reads as empty, because "empty" is
-        // the one thing the card will not boot or format.
+        // The board has room for one byte in hand, so a host that offers bytes
+        // faster than the store takes them loses some in the middle.  It must say
+        // so and leave the drive empty: the alternative is an image with holes in
+        // it that the board calls good, which DOS boots and then crashes on.
         send_cmd("d1");
         skip_until("UPLOAD");
         skip_to_eol;
-        for (i = 0; i < 64; i = i + 1) send(pat(i));
-        repeat (400) @(posedge clk);
-        check(drv_present[0] === 1'b0, "a cut-short upload leaves the drive empty");
-        check(drv_writable[0] === 1'b0, "a cut-short upload leaves it write protected");
+        $display("phase 4: fast host upload started");
+        for (i = 0; i < IMG_BYTES; i = i + 1) begin
+            @(negedge clk);
+            rx_byte  = pat(i) ^ 8'h3C;
+            rx_valid = 1'b1;
+            @(negedge clk);
+            rx_valid = 1'b0;
+        end
+        skip_until("lost");
+        skip_to_eol;
+        $display("phase 4: fast host answered");
+        repeat (200) @(posedge clk);
+        check(drv_present[0] === 1'b0, "an upload that lost bytes leaves the drive empty");
+        check(drv_writable[0] === 1'b0, "an upload that lost bytes leaves it protected");
+        check(drv_present[1] === 1'b0, "the reset cleared drive 2 as well");
 
         // ==============================================================
-        // 5. A second upload, all the way, and both drives checked
+        // 5. Every address in the image, driven straight into the store
         // ==============================================================
-        acks = 0;
-        upload(0, IMG_BYTES, 8'h5A);
-
-        check(drv_present[0] === 1'b1, "d1 fills drive 1");
-        check(drv_present[1] === 1'b1, "d1 leaves drive 2 alone");
+        // The wire tests above prove the protocol; this proves the addressing
+        // across the whole 143,360 bytes, which a short transfer cannot: the
+        // store's row, column and half-bit arithmetic only shows up in the high
+        // addresses, and a byte that lands one word out still reads back as
+        // plausible data.  The debugger is idle here, so its outputs are zero and
+        // the bench's OR onto the same pins is the only driver.
+        for (i = 0; i < IMG_BYTES; i = i + 1) store_put(1'b0, i);
+        $display("phase 5: direct upload done");
 
         bad = 0;
-        for (i = 0; i < IMG_BYTES; i = i + 1) begin
-            if (shadow[i]             !== (pat(i) ^ 8'h5A)) bad = bad + 1;
-            if (shadow[IMG_BYTES + i] !== pat(i))             bad = bad + 1;
-        end
-        check(bad == 0, "both drives hold their own image");
+        for (i = 0; i < IMG_BYTES; i = i + 1)
+            if (shadow[i] !== pat2(i)) bad = bad + 1;
+        check(bad == 0, "the direct upload fills drive 1 byte for byte");
+        check(drv_present[0] === 1'b1, "a direct upload also fills the drive");
+        check(drv_writable[0] === 1'b1, "and it is writable");
+
+        // Drive 2 still holds what the wire put in it, so the two images have not
+        // overlapped.
+        bad = 0;
+        for (i = 0; i < IMG_BYTES; i = i + 1)
+            if (shadow[IMG_BYTES + i] !== pat(i)) bad = bad + 1;
+        check(bad == 0, "drive 2's image is untouched by the direct upload");
 
         if (fails == 0)
             $display("tb_diskimg: PASS (%0d checks)", checks);
@@ -435,10 +569,23 @@ module tb_diskimg;
     end
 
     // A watchdog, so a handshake that never completes says so instead of running
-    // until the heat death of the universe.
+    // until the heat death of the universe.  The test is a few million clocks,
+    // which at 37 ns each is a couple of hundred milliseconds of simulated time,
+    // so half a second is generous and still bounded.
     initial begin
-        #2000000000;
+        #600000000;
         $display("tb_diskimg: FAIL (watchdog)");
+        $display("  dbg_mode=%b main_state=%0d return_job=%0d str_pos=%0d str_cnt=%0d img_addr=%0d",
+                 dbg_mode, u_dbg.main_state, u_dbg.return_job, u_dbg.str_pos,
+                 u_dbg.str_cnt, u_dbg.img_addr);
+        // What the board said last, which is usually the whole answer.
+        while (q_rd + 60 < q_wr) q_rd = q_rd + 1;
+        while (q_rd < q_wr) begin
+            gotb = q[q_rd % 65536];
+            $write("%c", (gotb >= 8'h20 && gotb < 8'h7F) ? gotb : 8'h2E);
+            q_rd = q_rd + 1;
+        end
+        $write("\n");
         $finish;
     end
 

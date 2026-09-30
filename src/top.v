@@ -81,7 +81,7 @@ module top (
 
     // The Disk ][ image transfer, between the debugger above and the image store
     // inside the core.
-    wire        img_up_go, img_up_drive, img_up_last, img_up_busy, img_up_done;
+    wire        img_up_go, img_up_drive, img_up_last, img_up_bad, img_up_busy, img_up_done;
     wire [17:0] img_up_addr;
     wire [7:0]  img_up_data;
     wire        img_dn_go, img_dn_drive, img_dn_last, img_dn_valid, img_dn_done;
@@ -134,6 +134,7 @@ module top (
         .img_up_addr(img_up_addr),
         .img_up_data(img_up_data),
         .img_up_last(img_up_last),
+        .img_up_bad(img_up_bad),
         .img_up_busy(img_up_busy),
         .img_up_done(img_up_done),
         .img_dn_go(img_dn_go),
@@ -266,6 +267,7 @@ module top (
         .img_up_addr(img_up_addr),
         .img_up_data(img_up_data),
         .img_up_last(img_up_last),
+        .img_up_bad(img_up_bad),
         .img_up_busy(img_up_busy),
         .img_up_done(img_up_done),
         .img_dn_go(img_dn_go),
