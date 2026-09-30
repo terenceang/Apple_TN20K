@@ -7,6 +7,9 @@
 #
 #  The RTL file list is fpga.yaml, read through scripts/sources.ps1.
 # ============================================================================
+param(
+    [string]$Target = ''
+)
 $ErrorActionPreference = 'Stop'
 
 $root = Split-Path -Parent $PSScriptRoot
@@ -22,6 +25,7 @@ function Run-Tb {
         [string]$Gen = '2005',
         [string[]]$Defines = @()
     )
+    if ($Target -and $Name -ne $Target) { return }
     Write-Host "=== $Name ==="
     # On Windows iverilog -o writes a vvp script whatever the extension is, so
     # name the output .vvp and run it through vvp explicitly.
@@ -95,6 +99,7 @@ $disk2 = @('src/disk2/disk2_card.v', 'src/disk2/disk2_store.v')
 $core  = @('src/apple2_core.v', 'src/apple2_mem.v', 'src/slot_bus.v',
            'src/cpu/cpu_65c02.v', 'src/cpu/ALU.v') + $disk2
 Run-Tb 'tb_disk2'        $disk2 -Gen '2012' -Defines $disk2Defines
+Run-Tb 'tb_diskimg'      @('src/serial_debugger.v', 'src/disk2/disk2_store.v') -Gen '2012'
 Run-Tb 'tb_video_hdmi'   (@('src/video_generator.v', 'src/colorbar_gen.v') + $hdmi)
 Run-Tb 'tb_cpu_trace'    $core -Defines $disk2Defines
 Run-Tb 'tb_auxsw'        $core -Defines $disk2Defines

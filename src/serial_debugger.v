@@ -593,7 +593,7 @@ module serial_debugger (
             endcase
 
             // Mode switching via Ctrl+B (ASCII 0x02)
-            if (rx_valid && (rx_byte == 8'h02)) begin
+            if (rx_valid && (rx_byte == 8'h02) && (main_state != M_IMG)) begin
                 if (!dbg_mode) begin
                     dbg_mode   <= 1'b1;
                     cpu_rdy    <= 1'b0;
@@ -733,7 +733,7 @@ module serial_debugger (
 
                 // Any of the six preset addresses above starts a dump; "m"
                 // reuses the last address. Only the address differs.
-                if (mem_preset) begin
+                if (mem_preset && !img_cmd) begin
                     main_state <= M_MEM;
                     seq_step   <= 5'd0;
                     mem_col    <= 4'd0;
@@ -1185,7 +1185,12 @@ module serial_debugger (
                         if (img_sent) begin
                             if (img_up_done) begin
                                 img_sent <= 1'b0;
-                                if (img_up_addr[11:0] == 12'hFFF) img_ackq <= 1'b1;
+                                if (img_up_addr[11:0] == 12'hFFF) begin
+                                    if (!tx_fifo_full)
+                                        fifo_push(8'h06);
+                                    else
+                                        img_ackq <= 1'b1;
+                                end
                                 img_addr <= img_addr + 18'd1;
                                 if (img_up_last) begin
                                     // Arrived and taken are counted separately,
@@ -1216,10 +1221,20 @@ module serial_debugger (
                                 img_have    <= 1'b0;
                                 img_sent    <= 1'b1;
                             end
-                        end else if (rx_valid) begin
-                            img_byte <= rx_byte;
-                            img_have <= 1'b1;
-                            img_rx   <= img_rx + 19'd1;
+                        end
+                        if (rx_valid) begin
+                            img_rx <= img_rx + 19'd1;
+                            if (!img_have && (!img_sent || img_up_done)) begin
+                                img_byte <= rx_byte;
+                                img_have <= 1'b1;
+                            end
+                        end
+                        if ((img_rx >= 19'd143360) && !img_have && !img_sent && (img_addr != 18'd143360)) begin
+                            img_up_bad <= 1'b1;
+                            str_pos    <= STR_LOST_START;
+                            str_cnt    <= STR_LOST_LEN;
+                            return_job <= M_IDLE;
+                            main_state <= M_STR;
                         end
     // The acknowledgement, whenever there is room for it.
                         if (img_ackq && !tx_fifo_full) begin

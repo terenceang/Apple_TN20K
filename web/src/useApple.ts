@@ -3,6 +3,13 @@ import { AppleStream } from './stream.js'
 import { encodeGamepad, encodeKey, encodeKeysUp, encodeReset, CTRL_B, CMD } from './protocol.js'
 import { SerialLink, serialSupported, BAUD } from './serial-link.js'
 import { isLetter, resolve } from './keymap.js'
+import {
+  validateDiskImage,
+  prepareUploadImage,
+  prepareDownloadImage,
+  uploadDisk,
+  downloadDisk,
+} from './disk.js'
 
 export type ConnState =
   | 'idle'
@@ -93,6 +100,18 @@ export interface Screen {
   page: Uint8Array
   gfx: Uint8Array
   at: number
+}
+
+export interface DriveState {
+  filename: string | null
+  busy: boolean
+}
+
+export interface DiskProgress {
+  drive: 1 | 2
+  phase: 'uploading' | 'downloading'
+  percent: number
+  detail: string
 }
 
 const MAX_LINES = 4000
@@ -329,6 +348,150 @@ export function useApple() {
     void connectSerial()
   }, [connectSerial])
 
+  const [drives, setDrives] = useState<Record<1 | 2, DriveState>>({
+    1: { filename: null, busy: false },
+    2: { filename: null, busy: false },
+  })
+  const [diskProgress, setDiskProgress] = useState<DiskProgress | null>(null)
+  const [diskError, setDiskError] = useState<string | null>(null)
+
+  const uploadDiskFile = useCallback(
+    async (drive: 1 | 2, file: File) => {
+      if (!link.current || conn.state !== 'open') {
+        throw new Error('Connect USB serial before uploading a disk image.')
+      }
+      setDiskError(null)
+      setDrives((d) => ({ ...d, [drive]: { ...d[drive], busy: true } }))
+      const wasConsole = mode === 'console'
+
+      try {
+        const buffer = await file.arrayBuffer()
+        const { data, order } = validateDiskImage(buffer, file.name)
+        const physical = prepareUploadImage(data, order)
+
+        if (wasConsole) {
+          send([CTRL_B])
+          await new Promise((r) => setTimeout(r, QUIET_MS))
+        }
+
+        setDiskProgress({
+          drive,
+          phase: 'uploading',
+          percent: 0,
+          detail: `Starting upload of ${file.name}...`,
+        })
+
+        await uploadDisk(link.current, drive, physical, {
+          onProgress: (p) => {
+            const percent = Math.round((p.track / p.totalTracks) * 100)
+            setDiskProgress({
+              drive,
+              phase: 'uploading',
+              percent,
+              detail: `Track ${p.track}/${p.totalTracks} (${percent}%)`,
+            })
+          },
+        })
+
+        setDrives((d) => ({ ...d, [drive]: { filename: file.name, busy: false } }))
+        setDiskProgress(null)
+
+        if (wasConsole) {
+          release(CMD.cont.charCodeAt(0))
+        }
+      } catch (err: any) {
+        setDrives((d) => ({ ...d, [drive]: { ...d[drive], busy: false } }))
+        setDiskProgress(null)
+        const msg = err?.message ?? String(err)
+        setDiskError(msg)
+        if (wasConsole) {
+          release(CMD.cont.charCodeAt(0))
+        }
+        throw err
+      }
+    },
+    [conn.state, mode, send, release],
+  )
+
+  const downloadDiskFile = useCallback(
+    async (drive: 1 | 2, format: 'dsk' | 'po' = 'dsk') => {
+      if (!link.current || conn.state !== 'open') {
+        throw new Error('Connect USB serial before downloading a disk image.')
+      }
+      setDiskError(null)
+      setDrives((d) => ({ ...d, [drive]: { ...d[drive], busy: true } }))
+      const wasConsole = mode === 'console'
+
+      try {
+        if (wasConsole) {
+          send([CTRL_B])
+          await new Promise((r) => setTimeout(r, QUIET_MS))
+        }
+
+        setDiskProgress({
+          drive,
+          phase: 'downloading',
+          percent: 0,
+          detail: `Starting download from Drive ${drive}...`,
+        })
+
+        const physical = await downloadDisk(link.current, drive, {
+          onProgress: (p) => {
+            const percent = Math.round((p.bytesReceived / p.totalBytes) * 100)
+            setDiskProgress({
+              drive,
+              phase: 'downloading',
+              percent,
+              detail: `${Math.round(p.bytesReceived / 1024)} KB / ${Math.round(p.totalBytes / 1024)} KB (${percent}%)`,
+            })
+          },
+        })
+
+        const fileData = prepareDownloadImage(physical, format)
+        setDrives((d) => ({ ...d, [drive]: { ...d[drive], busy: false } }))
+        setDiskProgress(null)
+
+        const ext = format === 'po' ? '.po' : '.dsk'
+        const baseName = drives[drive].filename
+          ? drives[drive].filename!.replace(/\.[^.]+$/, '')
+          : `disk${drive}`
+        const filename = `${baseName}${ext}`
+
+        if (typeof document !== 'undefined') {
+          const blob = new Blob([fileData as unknown as BlobPart], { type: 'application/octet-stream' })
+          const url = URL.createObjectURL(blob)
+          const a = document.createElement('a')
+          a.href = url
+          a.download = filename
+          document.body.appendChild(a)
+          a.click()
+          document.body.removeChild(a)
+          URL.revokeObjectURL(url)
+        }
+
+        if (wasConsole) {
+          release(CMD.cont.charCodeAt(0))
+        }
+      } catch (err: any) {
+        setDrives((d) => ({ ...d, [drive]: { ...d[drive], busy: false } }))
+        setDiskProgress(null)
+        const msg = err?.message ?? String(err)
+        setDiskError(msg)
+        if (wasConsole) {
+          release(CMD.cont.charCodeAt(0))
+        }
+        throw err
+      }
+    },
+    [conn.state, mode, send, release, drives],
+  )
+
+  const ejectDisk = useCallback((drive: 1 | 2) => {
+    setDrives((d) => ({ ...d, [drive]: { filename: null, busy: false } }))
+  }, [])
+
+  const clearDiskError = useCallback(() => setDiskError(null), [])
+
   const clearConsole = useCallback(() => setLines([]), [])
   const clearMem = useCallback(() => setMem([]), [])
 
@@ -347,6 +510,13 @@ export function useApple() {
       status,
       screen,
       busy,
+      drives,
+      diskProgress,
+      diskError,
+      uploadDiskFile,
+      downloadDiskFile,
+      ejectDisk,
+      clearDiskError,
       pressKey,
       resetKey,
       releaseKeys,
@@ -371,6 +541,13 @@ export function useApple() {
       status,
       screen,
       busy,
+      drives,
+      diskProgress,
+      diskError,
+      uploadDiskFile,
+      downloadDiskFile,
+      ejectDisk,
+      clearDiskError,
       pressKey,
       resetKey,
       releaseKeys,

@@ -269,7 +269,7 @@ module disk2_store (
     // the chip with.
     function [21:0] sd_word_addr(input [18:0] byte_even);
         begin
-            sd_word_addr = {1'b0, 2'b01, byte_even[18:1], 1'b0};
+            sd_word_addr = {2'b01, 1'b0, byte_even[18:1], 1'b0};
         end
     endfunction
 
@@ -345,7 +345,16 @@ module disk2_store (
             sec_addr_q     <= 19'd0;
             sec_hit_ok     <= 1'b0;
             want_low       <= 1'b0;
+            present[0]     <= 1'b0;
+            present[1]     <= 1'b0;
+            writable_q[0]  <= 1'b0;
+            writable_q[1]  <= 1'b0;
         end else begin
+            if (up_bad) begin
+                present[up_drive]    <= 1'b0;
+                writable_q[up_drive] <= 1'b0;
+                up_have              <= 1'b0;
+            end
             dsk_go     <= 1'b0;
             up_done    <= 1'b0;
             down_valid <= 1'b0;
@@ -431,8 +440,10 @@ module disk2_store (
                         // differ then bytes were dropped in the middle and the
                         // image is not merely absent but wrong, which is worse.
                         // A drive that has an image is one DOS will boot.
-                        if (up_last) present[up_drive] <= 1'b1;
-                        if (up_bad)  present[up_drive] <= 1'b0;
+                        if (up_last) begin
+                            present[up_drive]    <= 1'b1;
+                            writable_q[up_drive] <= 1'b1;
+                        end
                         if (up_have) begin
                             dsk_we    <= 1'b1;
                             // Which half of the word each byte goes in is its own

@@ -73,7 +73,7 @@ module apple2_core (
     input  wire [17:0] img_up_addr,
     input  wire [7:0]  img_up_data,
     input  wire        img_up_last,
-    output reg         img_up_bad,
+    input  wire        img_up_bad,
     output wire        img_up_busy,
     output wire        img_up_done,
     input  wire        img_dn_go,

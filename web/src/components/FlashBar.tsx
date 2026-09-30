@@ -9,10 +9,12 @@ interface Props {
   showConsole: boolean
   showDebugger: boolean
   showPaddles: boolean
+  showDisks: boolean
   onToggleScreen: () => void
   onToggleConsole: () => void
   onToggleDebugger: () => void
   onTogglePaddles: () => void
+  onToggleDisks: () => void
   onSerial: () => void
   onSerialNoVerify?: () => void
   onDisconnect: () => void
@@ -33,10 +35,12 @@ export function FlashBar({
   showConsole,
   showDebugger,
   showPaddles,
+  showDisks,
   onToggleScreen,
   onToggleConsole,
   onToggleDebugger,
   onTogglePaddles,
+  onToggleDisks,
   onSerial,
   onSerialNoVerify,
   onDisconnect,
@@ -137,6 +141,15 @@ export function FlashBar({
           aria-pressed={showPaddles}
         >
           Paddles
+        </button>
+        <button
+          type="button"
+          className={'toggle-btn' + (showDisks ? ' active' : '')}
+          onClick={onToggleDisks}
+          title={showDisks ? 'Hide Disk II Manager' : 'Show Disk II Manager'}
+          aria-pressed={showDisks}
+        >
+          Disks
         </button>
       </div>
     </div>

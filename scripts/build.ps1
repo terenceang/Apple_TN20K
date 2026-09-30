@@ -78,6 +78,8 @@ if ($wantSynth) {
     if (-not (Test-Path -LiteralPath (Join-Path $root 'roms\disk2_p6.hex'))) {
         $lines += "read_verilog -noblackbox -DDSK2_NO_P6_ROM src/disk2/disk2_card.v"
         Write-Host "== no roms\disk2_p6.hex: the card's `$C600 stays zero (INTCXROM boots DOS anyway)"
+    } else {
+        $lines += "read_verilog -noblackbox src/disk2/disk2_card.v"
     }
     foreach ($src in $sources) {
         if ($src -eq 'src/disk2/disk2_card.v') { continue }   # read above

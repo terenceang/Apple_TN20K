@@ -1109,3 +1109,305 @@ button.opt-pill.selected {
   border-color: #6d675a;
   color: var(--legend-dim);
 }
+
+/* ============================================================================
+   Disk II Manager Pane
+   ============================================================================ */
+
+.disk-pane {
+  background: var(--pane-bg, #1a1714);
+  border: 1px solid var(--pane-border, #332d26);
+  border-radius: 8px;
+  overflow: hidden;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+}
+
+.disk-drives-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 12px;
+  padding: 12px;
+}
+
+.disk-drive-card {
+  background: #231f1a;
+  border: 1px solid #383129;
+  border-radius: 6px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  transition: border-color 0.2s, background-color 0.2s;
+}
+
+.disk-drive-card.drag-over {
+  border-color: #6fbf5a;
+  background: #202b1c;
+}
+
+.disk-drive-card.has-disk {
+  border-color: #4a4237;
+}
+
+.disk-drive-card.busy {
+  border-color: #d97706;
+}
+
+.disk-drive-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.disk-drive-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.disk-drive-title h3 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: #e4dfd5;
+}
+
+.disk-led {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  display: inline-block;
+  background: #3c382f;
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.5);
+  transition: background-color 0.2s, box-shadow 0.2s;
+}
+
+.disk-led.active {
+  background: #22c55e;
+  box-shadow: 0 0 6px rgba(34, 197, 94, 0.7);
+}
+
+.disk-led.busy {
+  background: #f59e0b;
+  box-shadow: 0 0 8px rgba(245, 158, 11, 0.9);
+  animation: pulse-busy 0.8s infinite alternate;
+}
+
+@keyframes pulse-busy {
+  from { opacity: 0.6; }
+  to { opacity: 1; }
+}
+
+.disk-status-tag {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: #2d2720;
+  color: #9c9488;
+  font-weight: 500;
+}
+
+.disk-drive-card.has-disk .disk-status-tag {
+  background: rgba(34, 197, 94, 0.15);
+  color: #4ade80;
+}
+
+.disk-drive-card.busy .disk-status-tag {
+  background: rgba(245, 158, 11, 0.15);
+  color: #fbbf24;
+}
+
+.disk-drive-body {
+  min-height: 52px;
+  display: flex;
+  align-items: center;
+}
+
+.disk-info {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+}
+
+.disk-icon {
+  font-size: 22px;
+  line-height: 1;
+}
+
+.disk-details {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.disk-filename {
+  font-size: 13px;
+  font-weight: 600;
+  color: #f3efe6;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.disk-meta {
+  font-size: 11px;
+  color: #8a8274;
+}
+
+.disk-dropzone {
+  width: 100%;
+  border: 1px dashed #443c32;
+  border-radius: 4px;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  font-size: 12px;
+  color: #8c8374;
+  cursor: pointer;
+  background: #1c1814;
+  transition: border-color 0.2s, background-color 0.2s;
+}
+
+.disk-dropzone:hover {
+  border-color: #6fbf5a;
+  background: #22201b;
+  color: #d1cbbe;
+}
+
+.drop-icon {
+  font-size: 16px;
+  line-height: 1;
+}
+
+.drop-sub {
+  font-size: 10px;
+  color: #686154;
+}
+
+.disk-drive-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: auto;
+}
+
+.btn-disk-insert {
+  width: 100%;
+  padding: 6px 10px;
+  background: #2e2821;
+  border: 1px solid #443c32;
+  border-radius: 4px;
+  color: #e4dfd5;
+  font-size: 12px;
+  cursor: pointer;
+  font-weight: 500;
+  transition: background-color 0.15s, border-color 0.15s;
+}
+
+.btn-disk-insert:hover:not(:disabled) {
+  background: #3d352b;
+  border-color: #6fbf5a;
+}
+
+.btn-disk-action {
+  padding: 4px 8px;
+  background: #2e2821;
+  border: 1px solid #443c32;
+  border-radius: 4px;
+  color: #e4dfd5;
+  font-size: 11px;
+  cursor: pointer;
+  transition: background-color 0.15s, border-color 0.15s;
+}
+
+.btn-disk-action:hover:not(:disabled) {
+  background: #3d352b;
+  border-color: #5c5244;
+}
+
+.btn-disk-action.secondary {
+  margin-left: auto;
+  color: #a39c90;
+}
+
+.btn-disk-action:disabled,
+.btn-disk-insert:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.disk-error-banner {
+  background: rgba(239, 68, 68, 0.15);
+  border: 1px solid rgba(239, 68, 68, 0.4);
+  color: #fca5a5;
+  padding: 8px 12px;
+  margin: 10px 12px 0;
+  border-radius: 4px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 12px;
+}
+
+.disk-error-banner button {
+  background: transparent;
+  border: none;
+  color: #fca5a5;
+  font-size: 16px;
+  cursor: pointer;
+  padding: 0 4px;
+}
+
+.disk-progress-bar-container {
+  padding: 8px 12px 0;
+}
+
+.disk-progress-labels {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  margin-bottom: 4px;
+}
+
+.progress-phase {
+  font-weight: 600;
+  color: #f59e0b;
+}
+
+.progress-detail {
+  color: #a39c90;
+}
+
+.progress-track {
+  width: 100%;
+  height: 6px;
+  background: #231f1a;
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #f59e0b, #10b981);
+  transition: width 0.2s ease-out;
+}
+
+.disk-pane-footer {
+  padding: 8px 12px;
+  border-top: 1px solid #2a251e;
+  background: #171411;
+}
+
+.disk-tip {
+  font-size: 11px;
+  color: #787063;
+  line-height: 1.4;
+}
+

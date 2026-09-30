@@ -25,7 +25,7 @@ module tb_diskimg;
 
     localparam integer IMG_BYTES = 143360;   // 35 tracks x 16 sectors x 256
     localparam integer DL_BYTES  = 4096;     // how much of a download is checked
-    localparam integer SHADOWB   = 300000;   // two drives plus room for overruns
+    localparam integer SHADOWB   = 600000;   // two drives in SDRAM geometry (row 1024, col 512)
 
     reg clk = 1'b0;
     always #18.5 clk = ~clk;                 // 27 MHz
@@ -78,6 +78,7 @@ module tb_diskimg;
         .dbg_mem_ready(dbg_mem_ready), .dbg_aux(dbg_aux),
         .img_up_go(img_up_go), .img_up_drive(img_up_drive), .img_up_addr(img_up_addr),
         .img_up_data(img_up_data), .img_up_last(img_up_last),
+        .img_up_bad(img_up_bad),
         .img_up_busy(img_up_busy), .img_up_done(img_up_done),
         .img_dn_go(img_dn_go), .img_dn_drive(img_dn_drive), .img_dn_addr(img_dn_addr),
         .img_dn_last(img_dn_last), .img_dn_data(img_dn_data),
@@ -145,6 +146,14 @@ module tb_diskimg;
         begin
             byte_of = ((a[21:20] - 2'd1) * 1048576) + (a[19:9] * 1024) +
                       (a[8:1] * 2) + half;
+        end
+    endfunction
+
+    function integer shadow_idx(input integer drive, input integer off);
+        reg [18:0] flat;
+        begin
+            flat = (drive ? IMG_BYTES : 0) + off;
+            shadow_idx = (flat[18:9] * 1024) + (flat[8:1] * 2) + flat[0];
         end
     endfunction
 
@@ -222,7 +231,7 @@ module tb_diskimg;
             rx_valid = 1'b1;
             @(negedge clk);
             rx_valid = 1'b0;
-            repeat (18) @(posedge clk);
+            repeat (25) @(posedge clk);
         end
     endtask
 
@@ -241,7 +250,7 @@ module tb_diskimg;
         reg [9:0] sh;
         begin
             while (uart_tx !== 1'b0) @(posedge clk);   // wait for the start bit
-            #(37 * 19);                                 // into the middle of it
+            #(37 * 117);                                // into the middle of it
             sh[0] = uart_tx;
             for (k = 1; k < 10; k = k + 1) begin
                 #(37 * 234);
@@ -277,13 +286,26 @@ module tb_diskimg;
         end
     endtask
 
-    // A string literal passed to a vector argument is left-aligned, so character
-    // n is in the byte at the *top* end counting down, not at the bottom end
-    // counting up: s[8*n +: 8] is the padding.  Everything below asks for
-    // characters through here so that mistake is made once.
-    function [7:0] chr(input [8*16-1:0] s, input integer n);
+    // In Verilog, string literals are right-aligned (stored in the lowest bytes).
+    function integer strlen(input [8*16-1:0] s);
+        integer k;
         begin
-            chr = s[8*(16 - 1 - n) +: 8];
+            strlen = 0;
+            for (k = 15; k >= 0; k = k - 1)
+                if (strlen == 0 && s[8*k +: 8] !== 8'h00)
+                    strlen = k + 1;
+        end
+    endfunction
+
+    // Character n from the beginning of string s (0 is first character).
+    function [7:0] chr(input [8*16-1:0] s, input integer n);
+        integer len;
+        begin
+            len = strlen(s);
+            if (n < len)
+                chr = s[8*(len - 1 - n) +: 8];
+            else
+                chr = 8'h00;
         end
     endfunction
 
@@ -292,8 +314,7 @@ module tb_diskimg;
     task skip_until(input [8*16-1:0] s);
         integer k;
         begin
-            slen = 0;
-            while (slen < 16 && chr(s, slen) !== 8'h00) slen = slen + 1;
+            slen = strlen(s);
             for (k = 0; k < 16; k = k + 1) skipbuf[k] = 8'h00;
             forever begin
                 getbyte(gotb);
@@ -311,16 +332,15 @@ module tb_diskimg;
     task expect_str(input [8*16-1:0] s);
         integer n;
         begin
-            n = 0;
-            while (n < 16 && chr(s, n) !== 8'h00) begin
+            slen = strlen(s);
+            for (n = 0; n < slen; n = n + 1) begin
                 getbyte(gotb);
                 if (gotb !== chr(s, n)) begin
                     fails = fails + 1;
-                    $display("FAIL: expected %02x, got %02x, at %0d of the string",
-                             chr(s, n), gotb, n);
+                    $display("FAIL: expected %02x ('%c'), got %02x ('%c'), at %0d of the string",
+                             chr(s, n), chr(s, n), gotb, gotb, n);
                 end
                 checks = checks + 1;
-                n = n + 1;
             end
         end
     endtask
@@ -386,7 +406,7 @@ module tb_diskimg;
                     end
                 end
             end
-            expect_str("\r\ndone\r\n");
+            expect_str({8'h0D, 8'h0A, "done", 8'h0D, 8'h0A});
         end
     endtask
 
@@ -472,14 +492,14 @@ module tb_diskimg;
         // says where the bytes landed.
         bad = 0;
         for (i = 0; i < IMG_BYTES; i = i + 1)
-            if (shadow[IMG_BYTES + i] !== pat(i)) bad = bad + 1;
+            if (shadow[shadow_idx(1, i)] !== pat(i)) bad = bad + 1;
         check(bad == 0, "drive 2's image is byte for byte what was sent");
 
         // Nothing may have landed outside the drive.  The first IMG_BYTES bytes
         // are drive 1's image, which nothing was sent for.
         bad = 0;
         for (i = 0; i < IMG_BYTES; i = i + 1)
-            if (shadow[i] !== 8'h00) bad = bad + 1;
+            if (shadow[shadow_idx(0, i)] !== 8'h00) bad = bad + 1;
         check(bad == 0, "an upload to drive 2 does not spill into drive 1");
 
         // ==============================================================
@@ -489,7 +509,8 @@ module tb_diskimg;
         // which half of a word it takes the byte from, only show up on the way
         // out.  512 bytes is 256 words, which is plenty of both and 1.2 million
         // clocks rather than the 335 million a whole image costs.
-        send_cmd("e2");
+        send_cmd("e");
+        send_cmd("2");
         skip_until("DOWNLOAD");
         skip_to_eol;
         $display("phase 3: download started");
@@ -516,7 +537,8 @@ module tb_diskimg;
         // faster than the store takes them loses some in the middle.  It must say
         // so and leave the drive empty: the alternative is an image with holes in
         // it that the board calls good, which DOS boots and then crashes on.
-        send_cmd("d1");
+        send_cmd("d");
+        send_cmd("1");
         skip_until("UPLOAD");
         skip_to_eol;
         $display("phase 4: fast host upload started");
@@ -545,11 +567,13 @@ module tb_diskimg;
         // plausible data.  The debugger is idle here, so its outputs are zero and
         // the bench's OR onto the same pins is the only driver.
         for (i = 0; i < IMG_BYTES; i = i + 1) store_put(1'b0, i);
+        while (img_up_busy) @(posedge clk);
+        repeat (20) @(posedge clk);
         $display("phase 5: direct upload done");
 
         bad = 0;
         for (i = 0; i < IMG_BYTES; i = i + 1)
-            if (shadow[i] !== pat2(i)) bad = bad + 1;
+            if (shadow[shadow_idx(0, i)] !== pat2(i)) bad = bad + 1;
         check(bad == 0, "the direct upload fills drive 1 byte for byte");
         check(drv_present[0] === 1'b1, "a direct upload also fills the drive");
         check(drv_writable[0] === 1'b1, "and it is writable");
@@ -558,7 +582,7 @@ module tb_diskimg;
         // overlapped.
         bad = 0;
         for (i = 0; i < IMG_BYTES; i = i + 1)
-            if (shadow[IMG_BYTES + i] !== pat(i)) bad = bad + 1;
+            if (shadow[shadow_idx(1, i)] !== pat(i)) bad = bad + 1;
         check(bad == 0, "drive 2's image is untouched by the direct upload");
 
         if (fails == 0)

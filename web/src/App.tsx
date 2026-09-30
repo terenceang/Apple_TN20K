@@ -8,12 +8,14 @@ import { Screen } from './components/Screen'
 import { DebuggerPane } from './components/DebuggerPane'
 import { Gamepad } from './components/Gamepad'
 import { FlashBar } from './components/FlashBar'
+import { DiskPane } from './components/DiskPane'
 
 import {
   PREF_CONSOLE,
   PREF_DEBUGGER,
   PREF_SCREEN,
   PREF_PADDLES,
+  PREF_DISKS,
   getSavedBool,
   setSavedBool,
 } from './prefs.js'
@@ -31,8 +33,9 @@ export default function App() {
   const [showConsole, setShowConsoleState] = useState(() => getSavedBool(store, PREF_CONSOLE, false))
   const [showDebugger, setShowDebuggerState] = useState(() => getSavedBool(store, PREF_DEBUGGER, false))
   const [showPaddles, setShowPaddlesState] = useState(() => getSavedBool(store, PREF_PADDLES, true))
+  const [showDisks, setShowDisksState] = useState(() => getSavedBool(store, PREF_DISKS, true))
 
-  // One persistence wrapper; the four toggles differ only in key and setter.
+  // One persistence wrapper; the five toggles differ only in key and setter.
   const useToggle = (
     key: string,
     setter: (value: boolean | ((prev: boolean) => boolean)) => void,
@@ -52,6 +55,7 @@ export default function App() {
   const setShowConsole = useToggle(PREF_CONSOLE, setShowConsoleState)
   const setShowDebugger = useToggle(PREF_DEBUGGER, setShowDebuggerState)
   const setShowPaddles = useToggle(PREF_PADDLES, setShowPaddlesState)
+  const setShowDisks = useToggle(PREF_DISKS, setShowDisksState)
 
   // Ctrl+B is the debugger toggle. Automatically reveal the debugger pane when engaged.
   useEffect(() => {
@@ -107,7 +111,7 @@ export default function App() {
     [apple],
   )
 
-  const hasLeftCol = showConsole || showScreen
+  const hasLeftCol = showConsole || showScreen || showDisks
 
   return (
     <div className="app">
@@ -119,10 +123,12 @@ export default function App() {
         showConsole={showConsole}
         showDebugger={showDebugger}
         showPaddles={showPaddles}
+        showDisks={showDisks}
         onToggleScreen={() => setShowScreen((s) => !s)}
         onToggleConsole={() => setShowConsole((s) => !s)}
         onToggleDebugger={() => setShowDebugger((s) => !s)}
         onTogglePaddles={() => setShowPaddles((s) => !s)}
+        onToggleDisks={() => setShowDisks((s) => !s)}
         onSerial={apple.connectSerial}
         onSerialNoVerify={apple.connectWithoutVerify}
         onDisconnect={apple.disconnect}
@@ -132,6 +138,19 @@ export default function App() {
       <main className={!hasLeftCol ? 'no-left-col' : ''}>
         {hasLeftCol && (
           <div className="col-left">
+            {showDisks && (
+              <DiskPane
+                drives={apple.drives}
+                progress={apple.diskProgress}
+                error={apple.diskError}
+                onUpload={apple.uploadDiskFile}
+                onDownload={apple.downloadDiskFile}
+                onEject={apple.ejectDisk}
+                onClearError={apple.clearDiskError}
+                onClose={() => setShowDisks(false)}
+                disabled={apple.conn.state !== 'open'}
+              />
+            )}
             {showConsole && (
               <Console
                 lines={apple.lines}

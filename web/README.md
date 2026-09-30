@@ -198,11 +198,12 @@ src/
     layouts.js      the 63 keys as x/y/w/h + legends; the only place the
                     physical arrangement lives
   protocol.js       byte encoding and the firmware's literal strings
+  disk.js           Disk II image validation, interleaving (.dsk/.do <-> .po) & UART protocol
   stream.js         the one incoming stream, classified
   serial-link.js    Web Serial: the whole transport, straight to the board
   charset.js        the character ROM, addressed as the RTL addresses it
-  useApple.ts       the link, command pacing, screen capture
-  components/       Keyboard, Console, Screen, DebuggerPane, Gamepad, FlashBar
+  useApple.ts       the link, command pacing, screen capture, disk management
+  components/       Keyboard, Console, Screen, DebuggerPane, Gamepad, FlashBar, DiskPane
 scripts/charset.mjs roms/apple2e_char.hex -> src/generated/charset.json
 scripts/pages.mjs   build the Pages bundle, check it, copy to docs/
 test/               node --test
