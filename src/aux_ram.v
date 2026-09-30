@@ -15,12 +15,19 @@
 //  * CPU writes: a one-entry buffer. wr_go latches it at the CPU cycle;
 //    wr_busy is high until the SDRAM has taken it and blocks a second one.
 //
-// Priority at each 8-clock slot: refresh, line fill, CPU write, CPU read.
-// A refresh is due every REFRESH_CLKS (7.4 us at 27 MHz, under the 7.8 us
-// of 8192 rows per 64 ms).
+// A fourth client, the Disk ][ image store (src/disk2/disk2_store.v), was
+// added later and sits below all three: it moves whole sectors, and a floppy
+// sector has milliseconds of slack, so it must never delay the video line
+// fill or the CPU.
+//
+// Priority at each 8-clock slot: refresh, line fill, CPU write, CPU read,
+// disk store.  A refresh is due every REFRESH_CLKS (7.4 us at 27 MHz, under
+// the 7.8 us of 8192 rows per 64 ms).
 //
 // Byte a lives in word a[15:1]; a[0]=0 is the upper byte of the 16-bit word.
-// The SDRAM is not re-initialised on warm resets, so aux RAM survives them.
+// The SDRAM is not re-initialised on warm resets, so aux RAM survives them, and
+// so do the disk images: the store's images are in bank 1, which nothing else
+// addresses.
 
 module aux_ram (
     input  wire        clk,          // 27 MHz
@@ -41,6 +48,18 @@ module aux_ram (
     input  wire [15:0] wr_addr,
     input  wire [7:0]  wr_data,
     output wire        wr_busy,
+
+    // Disk ][ image store (src/disk2/disk2_store.v), the lowest-priority
+    // client.  A request is latched when dsk_go is pulsed, so a client that
+    // asks while the arbiter is busy does not lose it, and dsk_ack pulses when
+    // the slot has finished (with dsk_rdata valid, on a read).
+    input  wire        dsk_go,
+    input  wire [21:0] dsk_addr,
+    input  wire        dsk_we,
+    input  wire [15:0] dsk_wdata,
+    output wire [15:0] dsk_rdata,
+    output wire        dsk_ack,
+    output wire        dsk_idle,
 
     // SDRAM pins (Gowin embedded SDRAM names)
     output wire        O_sdram_clk,
@@ -81,12 +100,12 @@ module aux_ram (
     );
     assign O_sdram_addr = sd_a13[10:0];
 
-    localparam K_REF = 2'd0, K_FILL = 2'd1, K_WR = 2'd2, K_RD = 2'd3;
+    localparam [2:0] K_REF = 3'd0, K_FILL = 3'd1, K_WR = 3'd2, K_RD = 3'd3, K_DSK = 3'd4;
 
     // Operation engine
     reg        op_busy = 1'b0;
     reg [2:0]  t = 3'd0;
-    reg [1:0]  kind = K_REF;
+    reg [2:0]  kind = K_REF;
     reg [14:0] rd_word_q = 15'd0;
 
     // Refresh timer
@@ -117,6 +136,20 @@ module aux_ram (
     assign rd_hit  = cache_valid && (cache_word == rd_addr[15:1]);
     assign rd_data = rd_addr[0] ? cache_data[7:0] : cache_data[15:8];
 
+    // Disk store port.  A request is latched when dsk_go arrives, so the store
+    // can pulse one whenever it is ready and the request survives the arbiter
+    // being busy with a line fill or a CPU access; dsk_idle is then simply
+    // "nothing pending", which is the store's cue to raise the next one.
+    reg        dsk_pend = 1'b0;
+    reg [21:0] dsk_a_q  = 22'd0;
+    reg        dsk_we_q = 1'b0;
+    reg [15:0] dsk_d_q  = 16'd0;
+    reg [15:0] dsk_r_q  = 16'd0;
+    reg        dsk_ack_q= 1'b0;
+    assign dsk_idle = !dsk_pend;
+    assign dsk_ack  = dsk_ack_q;
+    assign dsk_rdata= dsk_r_q;
+
     // The controller can still be mid-cycle when it first reports ready, and
     // ignores a command then; give it 8 clocks.
     reg [3:0] settle = 4'd0;
@@ -138,6 +171,18 @@ module aux_ram (
             cache_valid <= 1'b0;
             fill_active <= 1'b0;
             wr_pend     <= 1'b0;
+            dsk_pend    <= 1'b0;
+            dsk_ack_q   <= 1'b0;
+        end
+
+        // A disk-store request is taken whatever the arbiter is doing, and held
+        // until a slot can be given to it.
+        dsk_ack_q <= 1'b0;
+        if (dsk_go) begin
+            dsk_pend <= 1'b1;
+            dsk_a_q  <= dsk_addr;
+            dsk_we_q <= dsk_we;
+            dsk_d_q  <= dsk_wdata;
         end
 
         if (fill_start) begin
@@ -172,6 +217,11 @@ module aux_ram (
                         cache_word  <= rd_word_q;
                         cache_valid <= !rd_stale && !wr_pend && !wr_go;
                     end
+                    K_DSK: begin
+                        dsk_r_q   <= sd_dout;
+                        dsk_pend  <= 1'b0;
+                        dsk_ack_q <= 1'b1;
+                    end
                     default: ;
                 endcase
             end
@@ -195,6 +245,14 @@ module aux_ram (
                 sd_addr <= {7'd0, rd_addr[15:1]};
                 rd_word_q <= rd_addr[15:1];
                 rd_stale <= 1'b0;
+                op_busy <= 1'b1; t <= 3'd0; sd_cs <= 1'b1;
+            end else if (dsk_pend) begin
+                // Lowest priority: a sector move, which has milliseconds of
+                // slack and must never delay the line fill or the CPU.
+                kind <= K_DSK; sd_refresh <= 1'b0; sd_we <= dsk_we_q;
+                sd_ds <= 2'b00;
+                sd_din <= dsk_d_q;
+                sd_addr <= dsk_a_q;
                 op_busy <= 1'b1; t <= 3'd0; sd_cs <= 1'b1;
             end
         end

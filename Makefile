@@ -16,6 +16,12 @@
 #  "openfpga.toolchain.path" setting be discovered automatically.
 # ============================================================================
 
+# The recipes below are written for cmd.exe -- `if exist` and `rmdir /s /q` in
+# clean are its syntax -- and GNU make silently switches to POSIX sh if an
+# sh.exe is on PATH, which Git Bash or MSYS2 would add.  Pin it, so what a
+# recipe means cannot change because a shell got installed.
+SHELL := cmd.exe
+
 PWSH  = C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -ExecutionPolicy Bypass
 BUILD = scripts/build.ps1
 PROG  = scripts/prog.ps1

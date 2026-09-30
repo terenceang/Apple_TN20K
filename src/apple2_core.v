@@ -45,12 +45,43 @@ module apple2_core (
     output wire [7:0]  aux_wr_data,
     input  wire        aux_wr_busy,
 
+    // Disk ][ controller in slot 6, and its image store in SDRAM
+    // (src/disk2/disk2_card.v, src/disk2/disk2_store.v).  The store's SDRAM
+    // port is wired to aux_ram's arbiter at the top level; the card sits on the
+    // slot bus below.
+    output wire        dsk_store_go,
+    output wire [21:0] dsk_store_addr,
+    output wire        dsk_store_we,
+    output wire [15:0] dsk_store_wdata,
+    input  wire [15:0] dsk_store_rdata,
+    input  wire        dsk_store_ack,
+    input  wire        dsk_store_idle,
+
     // Diagnostic status & Debugger Interface
     input  wire        cpu_rdy,
     input  wire [15:0] dbg_mem_addr,
     output wire [7:0]  dbg_mem_din,
     input  wire        dbg_aux,        // debugger reads aux RAM
     output wire        dbg_mem_ready,  // dbg_mem_din is valid
+
+    // The Disk ][ image transfer, from the debugger to the image store that
+    // lives here.  It crosses the same boundary as the memory bus above and for
+    // the same reason: the debugger is at the top level and the store is in here,
+    // and the store's SDRAM port already goes out to aux_ram's arbiter.
+    input  wire        img_up_go,
+    input  wire        img_up_drive,
+    input  wire [17:0] img_up_addr,
+    input  wire [7:0]  img_up_data,
+    input  wire        img_up_last,
+    output wire        img_up_busy,
+    output wire        img_up_done,
+    input  wire        img_dn_go,
+    input  wire        img_dn_drive,
+    input  wire [17:0] img_dn_addr,
+    input  wire        img_dn_last,
+    output wire [7:0]  img_dn_data,
+    output wire        img_dn_valid,
+    output wire        img_dn_done,
     output wire [15:0] debug_cpu_pc,
     output wire [15:0] debug_cpu_addr,
     output wire [7:0]  debug_cpu_dout,
@@ -107,6 +138,26 @@ module apple2_core (
     // A CPU cycle that really happens: while the debugger holds RDY low the
     // enable keeps ticking, and side effects must not replay on each tick.
     wire cpu_go = cpu_ce && cpu_rdy;
+    // A real access to the bus, by the CPU or by the debugger while it holds
+    // it.  The slot bus decodes on this rather than on cpu_go, so its strobes
+    // follow the same address the cpu_din mux uses (effective_cpu_addr).
+    wire bus_cycle = cpu_go || !cpu_rdy;
+
+    // Slot bus (src/slot_bus.v): the //e's peripheral bus decode, the $C800
+    // expansion-space arbitration and the interrupt daisy chain.  A Disk ][
+    // controller in slot 6 is the one card in it; every other slot is empty,
+    // so those card-side inputs are tied inactive at the instantiation and
+    // $C100-$CFFF behaves as it did before this was split out for a card that
+    // is not there: the internal ROM when a softswitch selects it, $00 for an
+    // empty slot.  The wires are declared here rather than next to the
+    // instantiation because the CPU below takes the interrupt lines from them.
+    wire        slot_irq_n;
+    wire        slot_nmi_n;
+    wire        slot_dma_n;
+    wire        slot_int_rom;
+    wire [7:0]  slot_dout;
+    wire [6:0]  devsel_n;
+    wire [6:0]  iosel_n;
 
     wire addr_is_c0 = (cpu_addr[15:8] == 8'hC0);
     assign io_addr  = cpu_addr[7:0];
@@ -126,8 +177,8 @@ module apple2_core (
         .DI(cpu_din),
         .DO(cpu_dout),
         .WE(cpu_we),
-        .IRQ(1'b0),
-        .NMI(1'b0),
+        .IRQ(slot_irq_n),
+        .NMI(slot_nmi_n),
         .RDY(cpu_go),
         .SYNC(cpu_sync),
         .debug_a(debug_cpu_a),
@@ -176,7 +227,11 @@ module apple2_core (
         end else if (cpu_go) begin
             spkr_pulse <= 1'b0;
 
-            // INTC8ROM: set by any $C3xx access with SLOTC3ROM off, cleared by $CFFF
+            // INTC8ROM: set by any $C3xx access with SLOTC3ROM off, cleared by
+            // $CFFF.  A card claiming $C800 for itself is u_slot_bus's own
+            // state (c8_owner), not this switch: on a real //e the two cannot
+            // both hold the space, and u_slot_bus already keeps its card out
+            // of the bus whenever this bit is set.
             if (cpu_addr[15:8] == 8'hC3 && !slotc3rom)
                 intc8rom <= 1'b1;
             else if (cpu_addr == 16'hCFFF)
@@ -237,11 +292,67 @@ module apple2_core (
     // Effective address: CPU address during normal operation, dbg_mem_addr when paused
     wire [15:0] effective_cpu_addr = (!cpu_rdy) ? dbg_mem_addr : cpu_addr;
 
+    // The slot bus.  There is one card in it: a Disk ][ controller in slot 6,
+    // which is the only card the //e's own ROM boot code knows how to drive
+    // ($C600 in the internal ROM is the Disk ][ boot).  Every other slot stays
+    // empty, so its card-side inputs are tied to their inactive levels.
+    //
+    // The active-low ties are 7'h7F and not 7'd7: that is decimal seven,
+    // 7'b0000111, which would leave slot 4 asserting a line it has no card to
+    // answer for.  card_data is a byte per card, so 56 bits wide, not 7.
+    // Index 5 of a seven-slot vector is slot 6, which is the indexing
+    // slot_bus uses throughout.
+    wire [7:0]  d2_rom_data;
+    wire [6:0]  card_present;
+    // A byte per card, so 56 bits wide, not 7, and all 56 of them driven in one
+    // assignment: the byte for the one slot that has a card, and $00 for the six
+    // that do not, which is what an empty slot reads on real hardware.  Left
+    // floating the other 48 bits are not $00 but X, and a second continuous
+    // assignment over the one slice would give that slice two drivers, which
+    // yosys reports as the port driving a constant.
+    wire [55:0] card_data;
+    assign card_data = (56'd0 & ~(56'hFF << (5 * 8))) |
+                       ({48'd0, d2_rom_data} << (5 * 8));
+
+    // The card's registers are on the $C0Ex bus, which the read mux claims
+    // after the motherboard's own $C0xx addresses and before the $00 an
+    // unclaimed I/O space returns.
+    wire [7:0]  d2_io_data;
+    wire        d2_io_hit = (effective_cpu_addr[15:8] == 8'hC0) &&
+                            (effective_cpu_addr[7:4] == 4'hE);
+
+    slot_bus u_slot_bus (
+        .clk(clk),
+        .reset(reset),
+        .bus_cycle(bus_cycle),
+        .addr(effective_cpu_addr),
+        .intcxrom(intcxrom),
+        .slotc3rom(slotc3rom),
+        .intc8rom(intc8rom),
+        .card_present(card_present),
+        .card_exprom(7'd0),      // a Disk ][ has no $C800 expansion ROM
+        .card_data(card_data),
+        .int_in_n(1'b1),
+        .card_irq_n(7'h7F),      // the controller never interrupts
+        .card_nmi_n(7'h7F),
+        .card_dma_n(7'h7F),
+        .devsel_n(devsel_n),     // the card listens to its own /DEVSEL
+        .iosel_n(iosel_n),       // ...and /IOSEL, to answer $C600-$C6FF
+        .irq_out_n(),
+        .iostrobe_n(),           // $CFFF releases the expansion space
+        .int_rom_sel(slot_int_rom),
+        .slot_dout(slot_dout),
+        .irq_n(slot_irq_n),
+        .nmi_n(slot_nmi_n),
+        .dma_n(slot_dma_n)
+    );
+
     // Address Decode logic:
     // Memory map:
     // $0000 - $BFFF: Main RAM (48KB)
-    // $C000 - $C0FF: I/O Softswitches
-    // $C100 - $CFFF: Internal Peripheral / Slot ROM
+    // $C000 - $C0FF: I/O Softswitches, and slots 1-7's $C0n0-$C0nF I/O
+    // $C100 - $C7FF: Slot ROM ($Cn00-$CnFF), or the internal peripheral ROM
+    // $C800 - $CFFF: Shared expansion space, the internal ROM when INTC8ROM
     // $D000 - $FFFF: Language Card (RAM or System ROM)
     wire is_ram_base = (effective_cpu_addr < 16'hC000);
     wire is_io       = (effective_cpu_addr[15:8] == 8'hC0);
@@ -366,16 +477,18 @@ module apple2_core (
                 cpu_din_comb = input_dout;
             end else if (effective_cpu_addr[7:4] == 4'h1 && effective_cpu_addr[3:0] != 4'h0) begin
                 cpu_din_comb = softswitch_read_data;
+            end else if (d2_io_hit) begin
+                // The Disk ][ controller's registers: the data register at Q6L
+                // and Q6, and the floating bus at the rest of $C0E0-$C0EF.
+                cpu_din_comb = d2_io_data;
             end else begin
                 cpu_din_comb = 8'h00;
             end
         end else if (is_slot_rom) begin
-            // No slot cards: the internal ROM answers when selected, else the bus floats
-            if (intcxrom || (effective_cpu_addr[15:8] == 8'hC3 && !slotc3rom)
-                         || (effective_cpu_addr >= 16'hC800 && intc8rom))
-                cpu_din_comb = rom_dout;
-            else
-                cpu_din_comb = 8'h00;
+            // The slot bus arbitrates: the internal $C100-$CFFF ROM when a
+            // softswitch selects it, otherwise the addressed card's byte, or
+            // $00 where the floating bus of an empty slot used to be.
+            cpu_din_comb = slot_int_rom ? rom_dout : slot_dout;
         end else if (is_lc_area) begin
             if (lc_read_ram)
                 cpu_din_comb = aux_sel_rd ? aux_rd_data : cpu_ram_dout; // Language Card RAM
@@ -396,5 +509,124 @@ module apple2_core (
     end
 
     assign dbg_mem_din = (!cpu_rdy) ? cpu_din_comb : cpu_din;
+
+    // ------------------------------------------------------------------
+    // Disk ][ controller card, slot 6
+    // ------------------------------------------------------------------
+    // One card on the slot bus, wired to the strobes slot_bus decodes for it.
+    // It sees the CPU's own cycles only (cpu_go), so the debugger walking the
+    // bus in `m` cannot step the head or turn the motor on, which is the same
+    // qualification rule the softswitch block above follows.
+    wire        d2_motor;
+    wire        d2_drive;
+    wire        d2_wr_mode;
+    wire        d2_grp_req;
+    wire [8:0]  d2_grp_off;
+    wire [5:0]  d2_grp_val;
+    wire        d2_grp_ack;
+    // The tag a group request is answered for, and the tag a written byte
+    // belongs to.  They carry the same three signals today -- the head is in one
+    // place -- but they are two ports of two modules, so they get two sets of
+    // wires rather than one wire with a driver on it from each end.
+    wire [3:0]  d2_grp_sec;
+    wire [8:0]  d2_grp_track;
+    wire        d2_grp_drive;
+    wire [1:0]  d2_drv_present;
+    wire [1:0]  d2_drv_writable;
+    wire        d2_wr_seen;
+    wire [7:0]  d2_wr_byte;
+    wire        d2_wr_in_data;
+    wire [8:0]  d2_wr_off;
+    wire [3:0]  d2_wr_sec;
+    wire [8:0]  d2_wr_track;   // 0..34, the track under the head
+    wire        d2_wr_drive;
+    wire        d2_any_disk;
+
+    assign card_present = 7'b0010000;   // slot 6 and nothing else
+    wire [6:0]  d2_dbg_track;
+    wire [7:0]  d2_dbg_head;
+
+    disk2_card u_disk2 (
+        .clk(clk),
+        .reset(reset),
+        .ce_1m(ce_1m),
+        .devsel_n(devsel_n[5]),
+        .iosel_n(iosel_n[5]),
+        .bus_cycle(cpu_go),
+        .cpu_we(cpu_we),
+        .addr(effective_cpu_addr),
+        .cpu_di(cpu_dout),
+        .rom_data(d2_rom_data),
+        .io_data(d2_io_data),
+        .grp_req(d2_grp_req),
+        .grp_off(d2_grp_off),
+        .grp_sec(d2_grp_sec),
+        .grp_track(d2_grp_track),
+        .grp_drive(d2_grp_drive),
+        .grp_val(d2_grp_val),
+        .grp_ack(d2_grp_ack),
+        .store_wr_seen(d2_wr_seen),
+        .store_wr_byte(d2_wr_byte),
+        .store_wr_data(d2_wr_in_data),
+        .store_wr_off(d2_wr_off),
+        .store_wr_sec(d2_wr_sec),
+        .store_wr_track(d2_wr_track),
+        .store_wr_drive(d2_wr_drive),
+        .store_drv_present(d2_drv_present),
+        .store_drv_writable(d2_drv_writable),
+        .dbg_track(d2_dbg_track),
+        .dbg_head(d2_dbg_head),
+        .dbg_motor(d2_motor),
+        .dbg_drive(d2_drive),
+        .dbg_any_disk(d2_any_disk),
+        .dbg_wr_mode(d2_wr_mode)
+    );
+
+    // The image store, whose SDRAM port leaves the core for aux_ram's arbiter
+    // at the top level.  The debugger's bulk transfer port is left off here
+    // and reaches the store through the top level too, for the same reason.
+    disk2_store u_disk2_store (
+        .clk(clk),
+        .reset(reset),
+        .grp_req(d2_grp_req),
+        .grp_off(d2_grp_off),
+        .grp_sec(d2_grp_sec),
+        .grp_track(d2_grp_track),
+        .grp_drive(d2_grp_drive),
+        .grp_val(d2_grp_val),
+        .grp_ack(d2_grp_ack),
+        .wr_seen(d2_wr_seen),
+        .wr_byte(d2_wr_byte),
+        .wr_in_data(d2_wr_in_data),
+        .wr_off(d2_wr_off),
+        .wr_sec(d2_wr_sec),
+        .wr_track(d2_wr_track),
+        .wr_drive(d2_wr_drive),
+        .drv_present(d2_drv_present),
+        .drv_writable(d2_drv_writable),
+        .up_go(img_up_go),
+        .up_drive(img_up_drive),
+        .up_addr(img_up_addr),
+        .up_data(img_up_data),
+        .up_last(img_up_last),
+        .up_busy(img_up_busy),
+        .up_done(img_up_done),
+        .down_go(img_dn_go),
+        .down_drive(img_dn_drive),
+        .down_addr(img_dn_addr),
+        .down_last(img_dn_last),
+        .down_data(img_dn_data),
+        .down_valid(img_dn_valid),
+        .down_done(img_dn_done),
+        .dbg_present(),
+        .dbg_track(),
+        .dsk_go(dsk_store_go),
+        .dsk_addr(dsk_store_addr),
+        .dsk_we(dsk_store_we),
+        .dsk_wdata(dsk_store_wdata),
+        .dsk_rdata(dsk_store_rdata),
+        .dsk_ack(dsk_store_ack),
+        .dsk_idle(dsk_store_idle)
+    );
 
 endmodule

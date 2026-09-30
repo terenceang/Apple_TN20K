@@ -68,7 +68,19 @@ if ($wantSynth) {
         "# Board:   Sipeed Tang Nano 20K (GW2AR-LV18QN88C8/I7)",
         ""
     )
+    # The Disk II card's $C600 boot ROM is Apple copyright and is not
+    # distributed (see roms/README.md), so it is loaded only if the user has put
+    # it there: $readmemh is a hard error on a missing file, and a fresh clone
+    # must still build.  With INTCXROM on, which is the reset default, the //e's
+    # own ROM at $C600 boots a Disk II without it; the card's copy only answers
+    # when the ROM selects the card's $C600 instead.  DSK2_NO_P6_ROM therefore
+    # leaves the card's $C600 as zeros.
+    if (-not (Test-Path -LiteralPath (Join-Path $root 'roms\disk2_p6.hex'))) {
+        $lines += "read_verilog -noblackbox -DDSK2_NO_P6_ROM src/disk2/disk2_card.v"
+        Write-Host "== no roms\disk2_p6.hex: the card's `$C600 stays zero (INTCXROM boots DOS anyway)"
+    }
     foreach ($src in $sources) {
+        if ($src -eq 'src/disk2/disk2_card.v') { continue }   # read above
         # src/sdram/ is vendored SystemVerilog; everything else is plain Verilog
         if ($src -match '^src/sdram/') {
             $lines += "read_verilog -noblackbox -sv $src"
@@ -103,16 +115,34 @@ if ($wantPnr) {
     }
 
     Write-Host "== $($script:NextPnr)"
-    & $script:NextPnr `
-        -q -l 'build/logs/pnr.log' `
-        '--device' 'GW2AR-LV18QN88C8/I7' `
-        '--vopt' 'family=GW2A-18C' `
-        '--vopt' "cst=$cst" `
-        '--freq'  "$mhz" `
-        '--json'  'build/yosys/top.json' `
-        '--write' 'build/pnr/top.pnr.json' `
-        '--report' 'build/reports/pnr.json'
-    if ($LASTEXITCODE -ne 0) { throw "nextpnr exited with code $LASTEXITCODE" }
+    # nextpnr writes warnings to stderr -- the clk_pixel CLKDIV cross-domain
+    # path is one this design always has -- and a native command's stderr
+    # becomes a terminating error while $ErrorActionPreference is 'Stop', which
+    # would abort the build before the timing check and the pack step.  Call it
+    # the way Invoke-Tool and sim\run.ps1 do: let the stream through, then judge
+    # the run by its exit code.  Its own log is build\logs\pnr.log.
+    $pnrArgs = @(
+        '-q', '-l', 'build/logs/pnr.log',
+        '--device', 'GW2AR-LV18QN88C8/I7',
+        '--vopt', 'family=GW2A-18C',
+        '--vopt', "cst=$cst",
+        '--freq',  "$mhz",
+        '--json',  'build/yosys/top.json',
+        '--write', 'build/pnr/top.pnr.json',
+        '--report', 'build/reports/pnr.json'
+    )
+    $prevEAP = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        # stderr merged in and printed as plain text below, so a warning stays
+        # visible without PowerShell's NativeCommandError trace around it.
+        $pnrOutput = & $script:NextPnr @pnrArgs 2>&1
+        $pnrExit = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $prevEAP
+    }
+    $pnrOutput | ForEach-Object { Write-Host $_ }
+    if ($pnrExit -ne 0) { throw "nextpnr exited with code $pnrExit" }
 
     # ── Timing check ─────────────────────────────────────────────────────────
     $pnrLog = Get-Content (Join-Path $root 'build\logs\pnr.log') -ErrorAction SilentlyContinue

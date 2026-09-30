@@ -79,6 +79,15 @@ module top (
     wire        dbg_mem_ready;
     wire        dbg_aux;
 
+    // The Disk ][ image transfer, between the debugger above and the image store
+    // inside the core.
+    wire        img_up_go, img_up_drive, img_up_last, img_up_busy, img_up_done;
+    wire [17:0] img_up_addr;
+    wire [7:0]  img_up_data;
+    wire        img_dn_go, img_dn_drive, img_dn_last, img_dn_valid, img_dn_done;
+    wire [17:0] img_dn_addr;
+    wire [7:0]  img_dn_data;
+
     // Asserted by the debugger's "x" (CPU reset) command; consumed by the core
     wire        cpu_reset_req;
 
@@ -120,6 +129,20 @@ module top (
         .dbg_mem_din(dbg_mem_din),
         .dbg_mem_ready(dbg_mem_ready),
         .dbg_aux(dbg_aux),
+        .img_up_go(img_up_go),
+        .img_up_drive(img_up_drive),
+        .img_up_addr(img_up_addr),
+        .img_up_data(img_up_data),
+        .img_up_last(img_up_last),
+        .img_up_busy(img_up_busy),
+        .img_up_done(img_up_done),
+        .img_dn_go(img_dn_go),
+        .img_dn_drive(img_dn_drive),
+        .img_dn_addr(img_dn_addr),
+        .img_dn_last(img_dn_last),
+        .img_dn_data(img_dn_data),
+        .img_dn_valid(img_dn_valid),
+        .img_dn_done(img_dn_done),
         .cpu_pc(debug_cpu_pc),
         .cpu_a(debug_cpu_a),
         .cpu_x(debug_cpu_x),
@@ -171,7 +194,9 @@ module top (
     wire [11:0] char_rom_addr;
     wire [7:0]  char_rom_data;
 
-    // Aux RAM (SDRAM) between the core, the video line buffer and the pins
+    // Aux RAM (SDRAM) between the core, the video line buffer and the pins,
+    // and the arbiter for the Disk ][ image store, which shares the same
+    // controller at the lowest priority.
     wire        aux_rd_want, aux_rd_hit, aux_wr_go, aux_wr_busy;
     wire [15:0] aux_rd_addr, aux_wr_addr;
     wire [7:0]  aux_rd_data, aux_wr_data, aux_line_data;
@@ -179,12 +204,20 @@ module top (
     wire [15:0] aux_fill_addr;
     wire [5:0]  aux_col;
 
+    // The Disk ][ store's SDRAM port, from the core's copy of the store.
+    wire        dsk_store_go, dsk_store_we, dsk_store_ack, dsk_store_idle;
+    wire [21:0] dsk_store_addr;
+    wire [15:0] dsk_store_wdata, dsk_store_rdata;
+
     aux_ram u_aux (
         .clk(clk_pixel), .reset(sys_reset),
         .fill_start(aux_fill_start), .fill_addr(aux_fill_addr), .col(aux_col),
         .line_data(aux_line_data),
         .rd_want(aux_rd_want), .rd_addr(aux_rd_addr), .rd_data(aux_rd_data), .rd_hit(aux_rd_hit),
         .wr_go(aux_wr_go), .wr_addr(aux_wr_addr), .wr_data(aux_wr_data), .wr_busy(aux_wr_busy),
+        .dsk_go(dsk_store_go), .dsk_addr(dsk_store_addr), .dsk_we(dsk_store_we),
+        .dsk_wdata(dsk_store_wdata), .dsk_rdata(dsk_store_rdata),
+        .dsk_ack(dsk_store_ack), .dsk_idle(dsk_store_idle),
         .O_sdram_clk(O_sdram_clk), .O_sdram_cke(O_sdram_cke), .O_sdram_cs_n(O_sdram_cs_n),
         .O_sdram_cas_n(O_sdram_cas_n), .O_sdram_ras_n(O_sdram_ras_n), .O_sdram_wen_n(O_sdram_wen_n),
         .IO_sdram_dq(IO_sdram_dq), .O_sdram_addr(O_sdram_addr), .O_sdram_ba(O_sdram_ba),
@@ -219,11 +252,29 @@ module top (
         .aux_rd_hit(aux_rd_hit), .aux_rd_data(aux_rd_data),
         .aux_wr_go(aux_wr_go), .aux_wr_addr(aux_wr_addr), .aux_wr_data(aux_wr_data),
         .aux_wr_busy(aux_wr_busy),
+        .dsk_store_go(dsk_store_go), .dsk_store_addr(dsk_store_addr),
+        .dsk_store_we(dsk_store_we), .dsk_store_wdata(dsk_store_wdata),
+        .dsk_store_rdata(dsk_store_rdata), .dsk_store_ack(dsk_store_ack),
+        .dsk_store_idle(dsk_store_idle),
         .cpu_rdy(cpu_rdy),
         .dbg_mem_addr(dbg_mem_addr),
         .dbg_mem_din(dbg_mem_din),
         .dbg_mem_ready(dbg_mem_ready),
         .dbg_aux(dbg_aux),
+        .img_up_go(img_up_go),
+        .img_up_drive(img_up_drive),
+        .img_up_addr(img_up_addr),
+        .img_up_data(img_up_data),
+        .img_up_last(img_up_last),
+        .img_up_busy(img_up_busy),
+        .img_up_done(img_up_done),
+        .img_dn_go(img_dn_go),
+        .img_dn_drive(img_dn_drive),
+        .img_dn_addr(img_dn_addr),
+        .img_dn_last(img_dn_last),
+        .img_dn_data(img_dn_data),
+        .img_dn_valid(img_dn_valid),
+        .img_dn_done(img_dn_done),
         .debug_cpu_pc(debug_cpu_pc),
         .debug_cpu_addr(debug_cpu_addr),
         .debug_cpu_dout(debug_cpu_dout),

@@ -13,7 +13,7 @@ An Apple //e implemented in Verilog for the [Sipeed Tang Nano 20K](https://wiki.
 - **Built-in hardware debugger**: press Ctrl+B to freeze the CPU and inspect registers, single-step, or dump memory
 - **Diagnostic LEDs**: heartbeat, PLL lock, reset, CPU write, text mode, key strobe
 
-Auxiliary 64 KB (in the board's on-board SDRAM, via the GPL-3 controller in `src/sdram/`) and 80-column text are implemented; double hi-res and MouseText (ALTCHARSET) are too; not yet: peripheral slots, disk drives, and interrupts. The browser front end shows the text screen only, not hi-res.
+Auxiliary 64 KB (in the board's on-board SDRAM, via the GPL-3 controller in `src/sdram/`) and 80-column text are implemented; double hi-res and MouseText (ALTCHARSET) are too, as is the //e's peripheral slot bus (address decode, $C800 expansion space, IRQ/NMI wiring) with no cards in it; not yet: peripheral cards themselves, disk drives, and interrupts. The browser front end shows the text screen only, not hi-res.
 
 ## Web front end
 
@@ -48,6 +48,7 @@ ROM supplied first — see [`web/README.md`](web/README.md).
 - Tang Nano 20K board
 - [Yosys](https://github.com/YosysHQ/yosys), [nextpnr-gowin](https://github.com/YosysHQ/nextpnr), [Apicula](https://github.com/YosysHQ/apicula) (`gowin_pack`)
 - [openFPGALoader](https://github.com/trabucayre/openFPGALoader)
+- [GNU make](https://www.gnu.org/software/make/) and Windows PowerShell 5.1, for the commands below. `make` is only the documented entry point — the build itself does not need it, since `scripts/build.ps1` and the OpenFPGA Deck both call the toolchain directly — but it is what every command here is spelled with. On Windows, GnuWin32 Make is enough: `winget install GnuWin32.Make`.
 - Apple //e ROM images. **These are not included**; see [`roms/README.md`](roms/README.md)
 
 ## Building
@@ -62,6 +63,8 @@ make clean
 ```
 
 `make` is a thin wrapper around `scripts/build.ps1`, which is the single build implementation, so the Makefile and the **OpenFPGA Deck** extension produce the same netlist at the same paths. The RTL file list lives in `fpga.yaml`; add new source files there. `scripts/build.ps1` fails the build if the achieved Fmax falls below the 27 MHz target, and `constraints/top.sdc` is available for a stricter two-domain timing analysis.
+
+The Makefile sets `SHELL := cmd.exe`: its recipes are cmd.exe commands, and GNU make otherwise switches to POSIX `sh` if an `sh.exe` is on `PATH` (Git Bash or MSYS2 would add one), which breaks `make clean`. Place and route is allowed to warn, so read the nextpnr report after making changes.
 
 To keep the HDMI core honest, `scripts/hdmi_diff.ps1 -Check` verifies `src/hdmi/` still matches its recorded snapshot, and `-Upstream` reports what has changed in the TN20K-HDMI project since.
 

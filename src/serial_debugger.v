@@ -14,6 +14,10 @@
 //   h/?  help, x  CPU reset, CR  repeat the prompt
 //   a  toggle aux RAM view: m and w then read the aux 64 KB (the dump prints
 //      ';' after the address, and w sets bit 7 of its flags byte)
+//   d1 d2  upload a Disk ][ image: the next 143,360 bytes are written to drive
+//      1 or 2, one byte at a time, with no framing and no way to interrupt
+//   e1 e2  download a Disk ][ image: 143,360 bytes of drive 1 or 2 come back,
+//      then a prompt
 //   0 1 4 8 f v  set the memory dump address ($0000 $0100 $0400 $0800
 //      $FA60 $FFF0) before m
 // 2. Hardware Debugger Mode (Toggle with Ctrl+B / ASCII 0x02):
@@ -67,6 +71,25 @@ module serial_debugger (
     input  wire        cpu_sync,
 
     // Hardware Status Inputs
+    // Disk ][ image transfer, one byte at a time because that is all the UART
+    // carries (src/disk2/disk2_store.v).  An address is a byte offset within the
+    // drive's image and the drive select is held for a whole transfer, which is
+    // what lets the store work out where a byte goes instead of counting.
+    output reg         img_up_go,     // take img_up_data at img_up_addr
+    output wire        img_up_drive,
+    output wire [17:0] img_up_addr,
+    output reg  [7:0]  img_up_data,
+    output wire        img_up_last,   // ...and it is the drive's last byte
+    input  wire        img_up_busy,   // a word write is in flight
+    input  wire        img_up_done,   // the store has the byte
+    output reg         img_dn_go,     // serve the byte at img_dn_addr
+    output wire        img_dn_drive,
+    output wire [17:0] img_dn_addr,
+    output wire        img_dn_last,   // ...and it is the drive's last byte
+    input  wire [7:0]  img_dn_data,
+    input  wire        img_dn_valid,  // img_dn_data is good
+    input  wire        img_dn_done,   // img_dn_last and it has been served
+
     // Softswitch state, for the W (screen dump) command
     input  wire        text_mode,
     input  wire        mixed_mode,
@@ -206,8 +229,13 @@ module serial_debugger (
     localparam STR_GFX_LEN      = 8'd5;
     localparam STR_END_START    = 8'd171;
     localparam STR_END_LEN      = 8'd7;
-
-    reg [7:0] str_rom [0:177];
+    localparam STR_UP_START     = 8'd178;
+    localparam STR_UP_LEN       = 8'd33;
+    localparam STR_DN_START     = 8'd211;
+    localparam STR_DN_LEN       = 8'd25;
+    localparam STR_DONE_START   = 8'd236;
+    localparam STR_DONE_LEN     = 8'd8;
+    reg [7:0] str_rom [0:243];
     initial begin
         str_rom[0] = 8'h0D; str_rom[1] = 8'h0A; str_rom[2] = 8'h5B; str_rom[3] = 8'h20;
         str_rom[4] = 8'h41; str_rom[5] = 8'h70; str_rom[6] = 8'h70; str_rom[7] = 8'h6C;
@@ -260,6 +288,33 @@ module serial_debugger (
         str_rom[169] = 8'h47; str_rom[170] = 8'h46; str_rom[171] = 8'h0D; str_rom[172] = 8'h0A;
         str_rom[173] = 8'h24; str_rom[174] = 8'h53; str_rom[175] = 8'h45; str_rom[176] = 8'h4E;
         str_rom[177] = 8'h44;
+        // Disk image transfer.  Appended rather than renumbered, because the
+        // strings above are pinned byte for byte by web/test/stream.test.js and
+        // the host finds its way to the debugger by looking for the help line:
+        // changing either would break a client that works today.  So the four
+        // new commands are not in the help text, the same way x, g and w are
+        // not, and they are documented in web/README.md instead.
+        // 178: "\r\nUPLOAD 143360 bytes, send now\r\n"
+        str_rom[178] = 8'h0D; str_rom[179] = 8'h0A; str_rom[180] = 8'h55; str_rom[181] = 8'h50;
+        str_rom[182] = 8'h4C; str_rom[183] = 8'h4F; str_rom[184] = 8'h41; str_rom[185] = 8'h44;
+        str_rom[186] = 8'h20; str_rom[187] = 8'h31; str_rom[188] = 8'h34; str_rom[189] = 8'h33;
+        str_rom[190] = 8'h33; str_rom[191] = 8'h36; str_rom[192] = 8'h30; str_rom[193] = 8'h20;
+        str_rom[194] = 8'h62; str_rom[195] = 8'h79; str_rom[196] = 8'h74; str_rom[197] = 8'h65;
+        str_rom[198] = 8'h73; str_rom[199] = 8'h2C; str_rom[200] = 8'h20; str_rom[201] = 8'h73;
+        str_rom[202] = 8'h65; str_rom[203] = 8'h6E; str_rom[204] = 8'h64; str_rom[205] = 8'h20;
+        str_rom[206] = 8'h6E; str_rom[207] = 8'h6F; str_rom[208] = 8'h77; str_rom[209] = 8'h0D;
+        str_rom[210] = 8'h0A;
+        // 211: "\r\nDOWNLOAD 143360 bytes\r\n"
+        str_rom[211] = 8'h0D; str_rom[212] = 8'h0A; str_rom[213] = 8'h44; str_rom[214] = 8'h4F;
+        str_rom[215] = 8'h57; str_rom[216] = 8'h4E; str_rom[217] = 8'h4C; str_rom[218] = 8'h4F;
+        str_rom[219] = 8'h41; str_rom[220] = 8'h44; str_rom[221] = 8'h20; str_rom[222] = 8'h31;
+        str_rom[223] = 8'h34; str_rom[224] = 8'h33; str_rom[225] = 8'h33; str_rom[226] = 8'h36;
+        str_rom[227] = 8'h30; str_rom[228] = 8'h20; str_rom[229] = 8'h62; str_rom[230] = 8'h79;
+        str_rom[231] = 8'h74; str_rom[232] = 8'h65; str_rom[233] = 8'h73; str_rom[234] = 8'h0D;
+        str_rom[235] = 8'h0A;
+        // 236: "\r\ndone\r\n"
+        str_rom[236] = 8'h0D; str_rom[237] = 8'h0A; str_rom[238] = 8'h64; str_rom[239] = 8'h6F;
+        str_rom[240] = 8'h6E; str_rom[241] = 8'h65; str_rom[242] = 8'h0D; str_rom[243] = 8'h0A;
     end
 
     // String printer sub-engine
@@ -294,6 +349,36 @@ module serial_debugger (
     localparam M_MEM     = 4'd4;
     localparam M_STATUS  = 4'd5;
     localparam M_SCREEN  = 4'd6;
+    localparam M_IMG     = 4'd7;   // a Disk ][ image, in or out
+
+    // A whole disk image, and nothing else: 35 tracks of 16 sectors of 256
+    // bytes, which is the only thing a Disk ][ has ever held.  At 115200 that is
+    // 12.4 seconds each way, which is why there is no framing and no resume --
+    // a transfer that is cut short is simply started again.
+    localparam [17:0] IMG_BYTES = 18'd143360;
+    localparam [17:0] IMG_LAST  = IMG_BYTES - 18'd1;
+
+    // Which way the bytes are going, and the position in the image.  img_dir is
+    // 0 for the host writing the drive (d) and 1 for the host reading it (e).
+    reg        img_dir  = 1'b0;
+    reg        img_drv  = 1'b0;
+    reg [17:0] img_addr = 18'd0;
+    assign img_up_drive = img_drv;
+    assign img_up_addr  = img_addr;
+    assign img_up_last  = (img_addr == IMG_LAST);
+    assign img_dn_drive = img_drv;
+    assign img_dn_addr  = img_addr;
+    assign img_dn_last  = (img_addr == IMG_LAST);
+
+    // The byte that has arrived from the host and the flag that says so, and the
+    // flag that says it has been handed to the store.  They are separate because
+    // the store's word write can still be in flight when the next byte arrives,
+    // and the byte in hand is what stops the two from being the same register.
+    reg [7:0] img_byte = 8'h00;
+    reg       img_have = 1'b0;      // a byte has arrived and is waiting
+    reg       img_sent = 1'b0;      // ...and it has been handed over
+    reg       img_ask  = 1'b0;      // a download request is out
+    reg       img_ackq = 1'b0;      // an acknowledgement is waiting for room
 
     // Screen dump state. The W command streams the 1 KB text page the video
     // generator is showing, in memory order ($0400/$0800 upward, interleaving
@@ -415,8 +500,24 @@ module serial_debugger (
             scr_col        <= 6'd0;
             scr_wait       <= 3'd0;
             scr_flags      <= 8'h00;
+            img_dir        <= 1'b0;
+            img_drv        <= 1'b0;
+            img_addr       <= 18'd0;
+            img_byte       <= 8'h00;
+            img_have       <= 1'b0;
+            img_sent       <= 1'b0;
+            img_ask        <= 1'b0;
+            img_ackq       <= 1'b0;
+            img_up_data    <= 8'h00;
+            img_up_go      <= 1'b0;
+            img_dn_go      <= 1'b0;
         end else begin
             fifo_push_en <= 1'b0;
+            // Both requests are one-clock pulses and the store takes one only
+            // while it is free, so they are cleared here and set where they are
+            // wanted rather than being held: a held request would be taken twice.
+            img_up_go <= 1'b0;
+            img_dn_go <= 1'b0;
 
             // Debugger CPU Reset Sequencer
             if (reset_timer != 8'd0) begin
@@ -532,6 +633,37 @@ module serial_debugger (
                         str_pos    <= STR_PROMPT_START;
                         str_cnt    <= STR_PROMPT_LEN;
                         return_job <= M_IDLE;
+                        main_state <= M_STR;
+                    end
+
+                    // d1/d2 take an image into a drive, e1/e2 give one back.
+                    // Both start by printing what is about to happen and then
+                    // hand control to M_IMG, so the string is out before the
+                    // first byte moves: for an upload the host must not start
+                    // sending into a machine that is still printing.
+                    "d", "D": begin
+                        img_dir   <= 1'b0;
+                        img_drv   <= (rx_byte >= "2");
+                        img_addr  <= 18'd0;
+                        img_have  <= 1'b0;
+                        img_sent  <= 1'b0;
+                        img_ask   <= 1'b0;
+                        img_up_go <= 1'b0;
+                        str_pos   <= STR_UP_START;
+                        str_cnt   <= STR_UP_LEN;
+                        return_job <= M_IMG;
+                        main_state <= M_STR;
+                    end
+
+                    "e", "E": begin
+                        img_dir   <= 1'b1;
+                        img_drv   <= (rx_byte >= "2");
+                        img_addr  <= 18'd0;
+                        img_ask   <= 1'b0;
+                        img_dn_go <= 1'b0;
+                        str_pos   <= STR_DN_START;
+                        str_cnt   <= STR_DN_LEN;
+                        return_job <= M_IMG;
                         main_state <= M_STR;
                     end
 
@@ -996,6 +1128,87 @@ module serial_debugger (
                         end
                         default: main_state <= M_IDLE;
                     endcase
+                end
+
+                // -------------------------------------------------------------
+                // Disk ][ image, in or out
+                // -------------------------------------------------------------
+                // Two directions, one engine, because both are "a byte, then the
+                // next one" and the only thing that differs is whose turn it is.
+                //
+                // Nothing here waits on the UART.  An upload is paced by the host,
+                // which is 86 us a byte against a 16-clock word write, and a
+                // download is paced by the TX FIFO, which a request is only made
+                // into when there is room in: a download of 143,360 bytes is 12.4
+                // seconds of sending and the store is never the slow part.
+                M_IMG: begin
+                    if (img_dir == 1'b0) begin
+                        // Host to drive.  A byte that has arrived is handed over
+                        // in one go pulse, and the pulse waits for the store to be
+                        // free: a byte offered while its word write is in flight
+                        // is not taken.
+                        //
+                        // One byte in hand is all there is room for, so the host
+                        // is paced by an acknowledgement for every *word* taken:
+                        // two bytes in, one 06 out.  Without that the host can
+                        // send faster than the store takes and every byte that
+                        // arrives while the previous one is still in hand is
+                        // dropped, which corrupts an image in the middle and
+                        // still ends with the last byte arriving and the drive
+                        // being marked good.  A host keeps a window of bytes in
+                        // flight and waits when the window is full, so the store
+                        // sets the pace and the link never has to.
+                        if (img_sent) begin
+                            if (img_up_done) begin
+                                img_sent <= 1'b0;
+                                if (img_up_addr[0]) img_ackq <= 1'b1;
+                                img_addr <= img_addr + 18'd1;
+                                if (img_up_last) begin
+                                    str_pos    <= STR_DONE_START;
+                                    str_cnt    <= STR_DONE_LEN;
+                                    return_job <= M_IDLE;
+                                    main_state <= M_STR;
+                                end
+                            end
+                        end else if (img_have) begin
+                            if (!img_up_busy) begin
+                                img_up_data <= img_byte;
+                                img_up_go   <= 1'b1;
+                                img_have    <= 1'b0;
+                                img_sent    <= 1'b1;
+                            end
+                        end else if (rx_valid) begin
+                            img_byte <= rx_byte;
+                            img_have <= 1'b1;
+                        end
+                        // The acknowledgement, whenever there is room for it.
+                        if (img_ackq && !tx_fifo_full) begin
+                            img_ackq <= 1'b0;
+                            fifo_push(8'h06);
+                        end
+                    end else begin
+                        // Drive to host.  The request is made only with room in
+                        // the FIFO, and nothing else pushes to the FIFO while
+                        // this runs -- the console is silent while the machine is
+                        // paused and the string engine has already finished -- so
+                        // the byte that comes back always has somewhere to go.
+                        if (img_ask) begin
+                            if (img_dn_valid) begin
+                                img_ask  <= 1'b0;
+                                img_addr <= img_addr + 18'd1;
+                                fifo_push(img_dn_data);
+                                if (img_dn_last) begin
+                                    str_pos    <= STR_DONE_START;
+                                    str_cnt    <= STR_DONE_LEN;
+                                    return_job <= M_IDLE;
+                                    main_state <= M_STR;
+                                end
+                            end
+                        end else if (!tx_fifo_full) begin
+                            img_dn_go <= 1'b1;
+                            img_ask   <= 1'b1;
+                        end
+                    end
                 end
 
                 default: main_state <= M_IDLE;

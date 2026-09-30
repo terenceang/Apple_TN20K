@@ -10,6 +10,9 @@ sources:
   - src/apple2_mem.v
   - src/sdram/sdram.v
   - src/aux_ram.v
+  - src/slot_bus.v
+  - src/disk2/disk2_card.v
+  - src/disk2/disk2_store.v
   - src/apple2_core.v
   - src/video_generator.v
   - src/colorbar_gen.v
