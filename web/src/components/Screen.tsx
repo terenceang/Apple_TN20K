@@ -18,6 +18,8 @@ const FLASH_MS = 620 // video_generator.v's flash_clk is about 1.6 Hz
 const LORES_BLOCK_W = 14 // a lo-res block is one 14-pixel character cell wide
 
 const rgb = (c: number[]) => `rgb(${c[0]},${c[1]},${c[2]})`
+// Precompute lo-res palette RGB strings once to avoid dynamic allocations during rendering.
+const LORES_PALETTE_RGB = LORES_PALETTE.map(rgb)
 
 export type PhosphorTheme = 'green' | 'amber' | 'white'
 
@@ -134,11 +136,22 @@ export function Screen({ screen, onCapture, busy, onClose }: Props) {
     const ctx = cv?.getContext('2d')
     if (!cv || !ctx || !screen || !cells) return
 
-    cv.width = SCR_COLS * GLYPH_W * SCALE
-    cv.height = SCR_TEXT_ROWS * GLYPH_H * SCALE
+    const targetW = SCR_COLS * GLYPH_W * SCALE
+    const targetH = SCR_TEXT_ROWS * GLYPH_H * SCALE
+
+    // BOLT OPTIMIZATION: Avoid resetting canvas backing buffer unless dimensions change.
+    // Setting cv.width / cv.height reallocates the canvas bitmap buffer.
+    if (cv.width !== targetW) cv.width = targetW
+    if (cv.height !== targetH) cv.height = targetH
+
     ctx.imageSmoothingEnabled = false
     ctx.fillStyle = 'rgb(0,0,0)'
     ctx.fillRect(0, 0, cv.width, cv.height)
+
+    // BOLT OPTIMIZATION: Precompute RGB color strings for the active phosphor theme
+    // outside the 960-cell rendering loop to eliminate ~1,920 redundant string allocations per frame.
+    const onRgb = rgb(curPal.on)
+    const offRgb = rgb(curPal.off)
 
     // The bottom four lines are lo-res graphics in mixed mode, which is where
     // the //e ROM normally leaves them. video_generator.v decides it the same
@@ -156,8 +169,8 @@ export function Screen({ screen, onCapture, busy, onClose }: Props) {
         // Inverse video swaps the lit and unlit colours, and the //e draws
         // flashing characters by toggling that bit, so it drives both.
         const inverse = cell.inverse !== flash
-        const on = rgb(inverse ? curPal.off : curPal.on)
-        const off = rgb(inverse ? curPal.on : curPal.off)
+        const on = inverse ? offRgb : onRgb
+        const off = inverse ? onRgb : offRgb
         for (let r = 0; r < GLYPH_H; r++) {
           const bits = dotRow(cell.code, r, flash ? 1 : 0)
           const y = (row * GLYPH_H + r) * SCALE
@@ -296,9 +309,10 @@ function drawLores(ctx: CanvasRenderingContext2D, row: number, screen: ScreenFra
   for (let block = 0; block < SCR_GFX_ROW_BYTES; block++) {
     const byte = screen.gfx[gfxRow * SCR_GFX_ROW_BYTES + block] ?? 0
     const y = row * GLYPH_H * SCALE
-    ctx.fillStyle = rgb(LORES_PALETTE[(byte >> 4) & 0x0f])
+    // BOLT OPTIMIZATION: Use precomputed LORES_PALETTE_RGB strings instead of calling rgb() in loop.
+    ctx.fillStyle = LORES_PALETTE_RGB[(byte >> 4) & 0x0f]
     ctx.fillRect(block * LORES_BLOCK_W * SCALE, y, LORES_BLOCK_W * SCALE, 4 * SCALE)
-    ctx.fillStyle = rgb(LORES_PALETTE[byte & 0x0f])
+    ctx.fillStyle = LORES_PALETTE_RGB[byte & 0x0f]
     ctx.fillRect(block * LORES_BLOCK_W * SCALE, y + 4 * SCALE, LORES_BLOCK_W * SCALE, 4 * SCALE)
   }
 }
