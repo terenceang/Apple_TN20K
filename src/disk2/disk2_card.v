@@ -168,7 +168,9 @@ module disk2_card (
     reg [7:0]  head_q  = 8'd0;     // the track under the head, 0..34
     reg [1:0]  phase_q = 2'd3;     // the last phase selected
     reg        wr_mode_q = 1'b0;   // Q7: the read/write mode select
-    reg [7:0]  shreg      = 8'hFF; // the shift register
+    reg [7:0]  shreg      = 8'hFF; // the shift register (write mode)
+    reg        started    = 1'b0;  // the first tick after reset presents byte 0 without moving on
+    reg        rdy_q      = 1'b0;  // a byte has arrived under the head and has not been read
     reg [7:0]  wr_latch   = 8'h00; // the write-mode data register
 
     localparam [7:0] TRACK_MAX = 8'd34;
@@ -468,14 +470,22 @@ module disk2_card (
     wire q6l_rd = q6l_sel && !cpu_we;
     wire q7_rd  = q7_sel  && !cpu_we;
     wire q7l_rd = q7l_sel && !cpu_we;
+    // In read mode the register holds the byte under the head with bit 7 set only
+    // while it is fresh, which is what the ROM's LDA/BPL loop polls for.  The
+    // byte counts as arrived once the store has answered for it (its field
+    // values come out of SDRAM), so a fast poller waits for the data instead of
+    // reading $FF where the field should be.
+    wire       byte_ok = rdy_q && (!in_data || grp_ok);
 
     always @(posedge clk or posedge reset) begin
         if (reset) begin
             track_pos <= 13'd0;
+            started   <= 1'b0;
             shift_cnt <= 6'd0;
             wr_mode_q <= 1'b0;
             shreg     <= 8'hFF;
             wr_latch  <= 8'h00;
+            rdy_q     <= 1'b0;
         end else begin
             if (q7_rd)            wr_mode_q <= 1'b0;   // $C0EF read: read mode
             if (q7_sel && cpu_we) wr_mode_q <= 1'b1;   // $C0EF write: write mode
@@ -485,21 +495,23 @@ module disk2_card (
             if (motor_q && ce_1m) begin
                 if (shift_cnt >= SHIFT_CLKS - 1) begin
                     shift_cnt <= 6'd0;
-                    if (track_pos >= TRACK_LEN - 1) track_pos <= 13'd0;
-                    else                                    track_pos <= track_pos + 1'b1;
+                    rdy_q     <= 1'b1;          // a new byte is under the head
+                    started   <= 1'b1;
+                    if (!started)                       track_pos <= track_pos;
+                    else if (track_pos >= TRACK_LEN - 1) track_pos <= 13'd0;
+                    else                                track_pos <= track_pos + 1'b1;
                 end else begin
                     shift_cnt <= shift_cnt + 1'b1;
                 end
             end
 
-            // ...and on each Q6/Q6L read, which on real hardware shifts the
-            // register the ROM is timing against.  A read with the motor off
-            // advances nothing: a stopped drive holds the last byte it read.
-            if (motor_q && q6_rd) begin
-                shreg <= synth_byte;
-                if (track_pos >= TRACK_LEN - 1) track_pos <= 13'd0;
-                else                                    track_pos <= track_pos + 1'b1;
-            end
+            // A read of the data register takes the byte; the next one is not there
+            // until the head reaches it.  Reads never move the head: a real drive
+            // hands the CPU one byte per 32 us however fast it polls, and a card
+            // that stepped on every read would run the stream several times too
+            // fast for the store to keep up (the store answers a position in ~54
+            // clocks of the 858 the head spends on it).
+            if (!wr_mode_q && q6l_rd && byte_ok) rdy_q <= 1'b0;
 
             if (wr_mode_q) begin
                 // Write mode: Q7L shifts the latched byte into the stream.
@@ -508,13 +520,6 @@ module disk2_card (
                     if (track_pos >= TRACK_LEN - 1) track_pos <= 13'd0;
                     else                                    track_pos <= track_pos + 1'b1;
                 end
-            end else begin
-                // Read mode: Q6L puts the next stream byte in the shift register.
-                if (q6l_rd) begin
-                shreg <= synth_byte;
-                if (track_pos >= TRACK_LEN - 1) track_pos <= 13'd0;
-                else                              track_pos <= track_pos + 1'b1;
-            end
             end
         end
     end
@@ -536,7 +541,8 @@ module disk2_card (
     // a read of it is the write-protect sense, so the motor's drive with no
     // image behind it (or a read-only one) reports protected.
     wire wr_protected = !store_drv_writable[drive_q];
-    wire [7:0] data_rd = wr_mode_q ? (wr_protected ? 8'h80 : 8'h00) : shreg;
+    wire [7:0] rd_byte = byte_ok ? synth_byte : {1'b0, synth_byte[6:0]};
+    wire [7:0] data_rd = wr_mode_q ? (wr_protected ? 8'h80 : 8'h00) : rd_byte;
 
     // What the card drives onto $C0E0-$C0EF: the data register at Q6L and Q6,
     // and the floating bus at the rest of the window.

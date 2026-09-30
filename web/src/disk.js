@@ -15,7 +15,13 @@ export const SECTOR_BYTES = 256
 export const TRACK_BYTES = SECTORS_PER_TRACK * SECTOR_BYTES // 4096
 export const DISK_BYTES = TRACKS * TRACK_BYTES // 143360
 
-export const ACK_BYTE = 0x06 // ASCII ACK returned by serial_debugger.v after each track
+export const HD_BLOCK_BYTES = 512
+export const HD_BLOCKS = 4096
+export const HD_BYTES = HD_BLOCKS * HD_BLOCK_BYTES // 2097152 (2 MB)
+export const HD_CHUNK_BYTES = 4096 // 8 blocks per ACK chunk
+export const HD_CHUNKS = HD_BYTES / HD_CHUNK_BYTES // 512 chunks
+
+export const ACK_BYTE = 0x06 // ASCII ACK returned by serial_debugger.v after each chunk
 
 /**
  * DOS 3.3 logical-to-physical sector interleave mapping.
@@ -387,6 +393,175 @@ export async function downloadDisk(link, drive, opts = {}) {
     await reader.waitFor(() => decoder.decode(reader.buffer).includes('done'), timeoutMs)
 
     return physicalBytes
+  } finally {
+    reader.restore()
+  }
+}
+
+/**
+ * Validates a ProDOS hard disk image buffer (.po, .hdv, .2mg, .bin, .img).
+ * If a 2MG container header ('2IMG') is detected, strips the header and extracts the raw disk payload.
+ * If the payload is smaller than 2 MB (2,097,152 bytes), pads it with zeros to exactly 2 MB.
+ *
+ * @param {ArrayBuffer | Uint8Array} buffer
+ * @param {string} [filename]
+ * @returns {{ data: Uint8Array, originalSize: number, is2mg: boolean, filename: string }}
+ */
+export function validateHardDiskImage(buffer, filename = '') {
+  const raw = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer)
+  let data = raw
+  let is2mg = false
+
+  if (
+    data.length >= 64 &&
+    data[0] === 0x32 && // '2'
+    data[1] === 0x49 && // 'I'
+    data[2] === 0x4d && // 'M'
+    data[3] === 0x47    // 'G'
+  ) {
+    is2mg = true
+    const view = new DataView(data.buffer, data.byteOffset, data.byteLength)
+    const dataOffset = view.getUint32(0x18, true)
+    const dataLen = view.getUint32(0x1c, true)
+    if (dataOffset + dataLen > data.length) {
+      throw new Error(
+        `Corrupted 2MG file: header specifies ${dataLen} bytes at offset ${dataOffset}, but file is only ${data.length} bytes.`,
+      )
+    }
+    data = data.subarray(dataOffset, dataOffset + dataLen)
+  }
+
+  if (data.byteLength === 0) {
+    throw new Error('Hard disk image is empty.')
+  }
+  if (data.byteLength > HD_BYTES) {
+    throw new Error(
+      `Hard disk image exceeds 2 MB limit: expected at most ${HD_BYTES.toLocaleString()} bytes (4,096 blocks), got ${data.byteLength.toLocaleString()} bytes.`,
+    )
+  }
+
+  // Pad to 2 MB if smaller
+  let padded = data
+  if (data.byteLength < HD_BYTES) {
+    padded = new Uint8Array(HD_BYTES)
+    padded.set(data, 0)
+  }
+
+  return {
+    data: padded,
+    originalSize: data.byteLength,
+    is2mg,
+    filename,
+  }
+}
+
+/**
+ * Upload a 2,097,152-byte ProDOS hard disk image to Slot 7 Drive 1 or Drive 2 over Web Serial.
+ *
+ * @param {{ write: (b: Uint8Array | number[]) => void, onBytes: (b: Uint8Array) => void }} link
+ * @param {1 | 2} drive
+ * @param {Uint8Array} hardDiskBytes
+ * @param {{
+ *   onProgress?: (p: { phase: 'uploading', chunk: number, totalChunks: number, bytesSent: number, totalBytes: number }) => void,
+ *   timeoutMs?: number
+ * }} [opts]
+ * @returns {Promise<void>}
+ */
+export async function uploadHardDisk(link, drive, hardDiskBytes, opts = {}) {
+  const drvNum = Number(drive) === 2 ? 2 : 1
+  const drvChar = drvNum === 2 ? '2' : '1'
+  const timeoutMs = opts.timeoutMs ?? 10000
+
+  if (!hardDiskBytes || hardDiskBytes.length !== HD_BYTES) {
+    throw new Error(`Hard disk upload payload must be exactly ${HD_BYTES} bytes, got ${hardDiskBytes?.length}`)
+  }
+
+  const reader = new LinkStreamReader(link)
+  try {
+    // Send 'p' followed by drive number ('1' or '2')
+    link.write([0x70]) // 'p'
+    await sleep(40)
+    link.write([drvChar.charCodeAt(0)])
+
+    // Wait for the FPGA debugger to enter M_IMG and announce upload:
+    // "\r\nUPLOAD 2097152 bytes, send now\r\n"
+    await reader.readUntil('UPLOAD', timeoutMs)
+
+    // Stream 512 chunks of 4096 bytes each
+    for (let c = 0; c < HD_CHUNKS; c++) {
+      const chunkData = hardDiskBytes.subarray(c * HD_CHUNK_BYTES, (c + 1) * HD_CHUNK_BYTES)
+      link.write(chunkData)
+      await reader.readAck(timeoutMs)
+      opts.onProgress?.({
+        phase: 'uploading',
+        chunk: c + 1,
+        totalChunks: HD_CHUNKS,
+        bytesSent: (c + 1) * HD_CHUNK_BYTES,
+        totalBytes: HD_BYTES,
+      })
+    }
+
+    // Wait for final response: "\r\ndone\r\n" or "\r\nlost\r\n"
+    const decoder = new TextDecoder()
+    await reader.waitFor(() => {
+      const text = decoder.decode(reader.buffer)
+      return text.includes('done') || text.includes('lost')
+    }, timeoutMs)
+
+    const resultText = decoder.decode(reader.buffer)
+    if (resultText.includes('lost')) {
+      throw new Error('Upload failed: FPGA reported bytes lost / dropped in transit.')
+    }
+  } finally {
+    reader.restore()
+  }
+}
+
+/**
+ * Download a 2,097,152-byte ProDOS hard disk image from Slot 7 Drive 1 or Drive 2 over Web Serial.
+ *
+ * @param {{ write: (b: Uint8Array | number[]) => void, onBytes: (b: Uint8Array) => void }} link
+ * @param {1 | 2} drive
+ * @param {{
+ *   onProgress?: (p: { phase: 'downloading', bytesReceived: number, totalBytes: number }) => void,
+ *   timeoutMs?: number
+ * }} [opts]
+ * @returns {Promise<Uint8Array>} Raw 2,097,152 byte ProDOS hard disk image bytes
+ */
+export async function downloadHardDisk(link, drive, opts = {}) {
+  const drvNum = Number(drive) === 2 ? 2 : 1
+  const drvChar = drvNum === 2 ? '2' : '1'
+  const timeoutMs = opts.timeoutMs ?? 10000
+
+  const reader = new LinkStreamReader(link)
+  try {
+    // Send 'o' followed by drive number ('1' or '2')
+    link.write([0x6f]) // 'o'
+    await sleep(40)
+    link.write([drvChar.charCodeAt(0)])
+
+    // Wait for the FPGA debugger to announce download:
+    // "\r\nDOWNLOAD 2097152 bytes\r\n"
+    await reader.readUntil('DOWNLOAD', timeoutMs)
+
+    // Collect 2,097,152 bytes
+    const hardDiskBytes = await reader.readBytes(
+      HD_BYTES,
+      (bytesReceived) => {
+        opts.onProgress?.({
+          phase: 'downloading',
+          bytesReceived,
+          totalBytes: HD_BYTES,
+        })
+      },
+      timeoutMs,
+    )
+
+    // Wait for trailing "\r\ndone\r\n"
+    const decoder = new TextDecoder()
+    await reader.waitFor(() => decoder.decode(reader.buffer).includes('done'), timeoutMs)
+
+    return hardDiskBytes
   } finally {
     reader.restore()
   }

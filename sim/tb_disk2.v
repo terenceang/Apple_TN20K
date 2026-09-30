@@ -355,10 +355,17 @@ module tb_disk2;
     // The data register: a Q6L read takes the next stream byte, which is what
     // RWTS does to walk a track.  In write mode, a write to Q6L latches a byte
     // and a Q7L read shifts it in.
+    // The register has bit 7 set only for a fresh byte, so poll for it as the ROM's
+    // LDA/BPL loop does; the card waits for the store by itself now, which the
+    // bench used to do for it (wait_grp) when reads stepped the head.
     task read_byte(output [7:0] d);
+        integer g;
         begin
-            wait_grp;
-            read_reg(4'hC, d);      // Q6L: the data register
+            g = 0; d = 8'h00;
+            while (d[7] !== 1'b1 && g < 4000) begin
+                read_reg(4'hC, d);      // Q6L: the data register
+                g = g + 1;
+            end
         end
     endtask
 
@@ -478,14 +485,13 @@ module tb_disk2;
     endfunction
 
     // The two bits of a group the other way up, which is how 6-and-2 packs them.
+    // The P6 ROM unpacks a group with LSR/ROL/LSR/ROL, which puts the group's
+    // bit 0 in the byte's bit 1 and the group's bit 1 in the byte's bit 0, so a
+    // disk holds each pair transposed.  This is checked against the ROM's own
+    // arithmetic in check_p6_unpack below, not just against the design.
     function [1:0] model_swap2(input [1:0] v);
         begin
-            // Not a swap: a pair in a group is a byte's low two bits in order,
-            // the more significant bit of the pair being the byte's bit 1.  RWTS
-            // reads a group's low two bits as they stand, so a model that
-            // transposed them here and again on the way back would pass while
-            // putting bytes on the disk that a real drive reads transposed.
-            model_swap2 = v;
+            model_swap2 = {v[0], v[1]};
         end
     endfunction
 
@@ -690,12 +696,9 @@ module tb_disk2;
         // content of the stream, not its rate.
         begin
             reset = 1'b1; #40; @(posedge clk); reset = 1'b0; #40;
+            xfer(4'h9, 1'b0, 8'h00);   // motor on: the head only moves with the motor, one byte per 32 us
             check("the stream starts at the top of the track", dbg_head === 8'd0);
-            // Let the store fill sector 0's buffer before the model is read.
-            repeat (200) @(posedge ce_1m);
-            prime_read;
-            // With the motor off, reads are the only thing that moves the
-            // stream: 48 self-sync bytes, then the header address mark.
+            // 48 self-sync bytes, then the header address mark.
             for (diff_i = 0; diff_i < 48; diff_i = diff_i + 1) read_byte(rb);
             check("48 self-sync bytes come first", rb === 8'hFF);
             read_byte(b0); check("the header mark is D5", b0 === 8'hD5);
@@ -771,10 +774,10 @@ module tb_disk2;
         // ---- the write path ----
         // Write a whole data field in write mode and check it comes back out
         // of the image afterwards, which is what RWTS's verify read does.
-        // The motor stays off, so the bench stays on the byte it is writing.
+        // The motor is stopped at the field's first byte, so the bench stays on the byte it is writing.
         begin
             reset = 1'b1; #40; @(posedge clk); reset = 1'b0; #40;
-            repeat (200) @(posedge ce_1m);
+            xfer(4'h9, 1'b0, 8'h00);   // motor on: the head only moves with the motor, one byte per 32 us
 
             // Wipe sector 0 of drive 1 in the shadow, so the write is over
             // something known.  This stands in for the debugger's upload path,
@@ -784,7 +787,6 @@ module tb_disk2;
 
             // Walk to sector 0's data address mark.  The stream is reset to the
             // top of the track, so sector 0's header is the first one.
-            prime_read;
             for (diff_i = 0; diff_i < 48; diff_i = diff_i + 1) read_byte(rb);
             read_byte(b0); read_byte(b1); read_byte(b2);
             check("48 self-sync bytes, then the header mark", b0 === 8'hD5);
@@ -794,15 +796,17 @@ module tb_disk2;
             read_byte(a6); read_byte(a7);
             decode_address;
             read_byte(t0); read_byte(t1); read_byte(t2);
-            // Six self-sync bytes, then the $D5 and the $AA of the data mark.
-            // Stopping short of the $AD is deliberate: a read hands back the byte
-            // one position behind the head and leaves the head one past it,
-            // while a write goes into the position the head is at, so reading
-            // the whole mark would leave the head one byte too far on and the
-            // field would be written a byte out.
+            // Six self-sync bytes, then the data mark $D5 $AA $AD, then one more
+            // read, which is the first data byte's slot.  A read hands back the
+            // byte under the head and leaves the head on it, and a write goes
+            // into the position the head is at, so the motor is stopped right
+            // here (well inside the 32 us the head stays on a byte) and the
+            // field is written from this position on, per access.
             for (diff_i = 0; diff_i < 6; diff_i = diff_i + 1) read_byte(rb);
-            read_byte(b0); read_byte(b1);
-            check("the data mark's D5 and AA are next", b0 === 8'hD5 && b1 === 8'hAA);
+            read_byte(b0); read_byte(b1); read_byte(b2);
+            read_byte(rb);
+            xfer(4'h8, 1'b0, 8'h00);      // motor off: hold the head
+            check("the data mark's D5 and AA are next", b0 === 8'hD5 && b1 === 8'hAA && b2 === 8'hAD);
             check("the head is at the first data byte", dbg_playoff == 13'd71);
 
             // Write mode, then a field holding sector 3's bytes, so a sector
@@ -839,7 +843,7 @@ module tb_disk2;
     end
 
     initial begin
-        #40000000;
+        #4000000000; // 4 s: the stream runs in real time now (32 us a byte)
         $display("tb_disk2: FAIL (timeout)");
         $finish;
     end

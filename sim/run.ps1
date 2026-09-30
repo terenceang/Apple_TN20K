@@ -78,6 +78,9 @@ Run-Tb 'tb_data_island'  $island
 Run-Tb 'tb_sound'        @('src/sound_generator.v')
 Run-Tb 'tb_input'        @('src/input_controller.v')
 Run-Tb 'tb_slots'        @('src/slot_bus.v')
+Run-Tb 'tb_sd_loader'    @('src/prodos/sd_loader.v')
+Run-Tb 'tb_fat_test'     @('src/sdtest/sd_blk.v', 'src/sdtest/fat_test.v')
+Run-Tb 'tb_fat_test'     @('src/sdtest/sd_blk.v', 'src/sdtest/fat_test.v') -Defines @('-DFMT')
 
 # The card's $C600 boot ROM is Apple copyright and is not in the repo (see
 # roms/README.md), so it is loaded only if the user has put it there, the same
@@ -96,13 +99,14 @@ if (-not (Test-Path -LiteralPath (Join-Path $root 'roms\disk2_p6.hex'))) {
 # apple2_core, so both need the card with it; tb_disk2 drives the card on its
 # own and does not want the core.
 $disk2 = @('src/disk2/disk2_card.v', 'src/disk2/disk2_store.v')
-$core  = @('src/apple2_core.v', 'src/apple2_mem.v', 'src/slot_bus.v',
+$core  = @('src/apple2_core.v', 'src/apple2_mem.v', 'src/slot_bus.v', 'src/prodos/prodos_card.v',
            'src/cpu/cpu_65c02.v', 'src/cpu/ALU.v') + $disk2
 Run-Tb 'tb_disk2'        $disk2 -Gen '2012' -Defines $disk2Defines
 Run-Tb 'tb_diskimg'      @('src/serial_debugger.v', 'src/disk2/disk2_store.v') -Gen '2012'
 Run-Tb 'tb_video_hdmi'   (@('src/video_generator.v', 'src/colorbar_gen.v') + $hdmi)
 Run-Tb 'tb_cpu_trace'    $core -Defines $disk2Defines
 Run-Tb 'tb_auxsw'        $core -Defines $disk2Defines
+Run-Tb 'tb_p6boot'       $core -Gen '2012' -Defines $disk2Defines
 
 Run-Tb 'tb_aux_ram'      @('sim/models/sdram_model.v', 'src/aux_ram.v', 'src/sdram/sdram.v') -Gen '2012'
 

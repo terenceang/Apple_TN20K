@@ -91,6 +91,23 @@ module serial_debugger (
     input  wire        img_dn_valid,  // img_dn_data is good
     input  wire        img_dn_done,   // img_dn_last and it has been served
 
+    // ProDOS Hard Disk image transfer (2 MB per drive)
+    output reg         hd_up_go,
+    output wire        hd_up_drive,
+    output wire [20:0] hd_up_addr,
+    output reg  [7:0]  hd_up_data,
+    output wire        hd_up_last,
+    output reg         hd_up_bad,
+    input  wire        hd_up_busy,
+    input  wire        hd_up_done,
+    output reg         hd_dn_go,
+    output wire        hd_dn_drive,
+    output wire [20:0] hd_dn_addr,
+    output wire        hd_dn_last,
+    input  wire [7:0]  hd_dn_data,
+    input  wire        hd_dn_valid,
+    input  wire        hd_dn_done,
+
     // Softswitch state, for the W (screen dump) command
     input  wire        text_mode,
     input  wire        mixed_mode,
@@ -230,15 +247,19 @@ module serial_debugger (
     localparam STR_GFX_LEN      = 8'd5;
     localparam STR_END_START    = 8'd171;
     localparam STR_END_LEN      = 8'd7;
-    localparam STR_UP_START     = 8'd178;
+    localparam STR_UP_START     = 9'd178;
     localparam STR_UP_LEN       = 8'd33;
-    localparam STR_DN_START     = 8'd211;
+    localparam STR_DN_START     = 9'd211;
     localparam STR_DN_LEN       = 8'd25;
-    localparam STR_DONE_START   = 8'd236;
+    localparam STR_DONE_START   = 9'd236;
     localparam STR_DONE_LEN     = 8'd8;
-    localparam STR_LOST_START   = 8'd244;
+    localparam STR_LOST_START   = 9'd244;
     localparam STR_LOST_LEN     = 8'd8;
-    reg [7:0] str_rom [0:251];
+    localparam STR_HD_UP_START  = 9'd252;
+    localparam STR_HD_UP_LEN    = 8'd34;
+    localparam STR_HD_DN_START  = 9'd286;
+    localparam STR_HD_DN_LEN    = 8'd26;
+    reg [7:0] str_rom [0:311];
     initial begin
         str_rom[0] = 8'h0D; str_rom[1] = 8'h0A; str_rom[2] = 8'h5B; str_rom[3] = 8'h20;
         str_rom[4] = 8'h41; str_rom[5] = 8'h70; str_rom[6] = 8'h70; str_rom[7] = 8'h6C;
@@ -291,12 +312,7 @@ module serial_debugger (
         str_rom[169] = 8'h47; str_rom[170] = 8'h46; str_rom[171] = 8'h0D; str_rom[172] = 8'h0A;
         str_rom[173] = 8'h24; str_rom[174] = 8'h53; str_rom[175] = 8'h45; str_rom[176] = 8'h4E;
         str_rom[177] = 8'h44;
-        // Disk image transfer.  Appended rather than renumbered, because the
-        // strings above are pinned byte for byte by web/test/stream.test.js and
-        // the host finds its way to the debugger by looking for the help line:
-        // changing either would break a client that works today.  So the four
-        // new commands are not in the help text, the same way x, g and w are
-        // not, and they are documented in web/README.md instead.
+        // Disk image transfer.
         // 178: "\r\nUPLOAD 143360 bytes, send now\r\n"
         str_rom[178] = 8'h0D; str_rom[179] = 8'h0A; str_rom[180] = 8'h55; str_rom[181] = 8'h50;
         str_rom[182] = 8'h4C; str_rom[183] = 8'h4F; str_rom[184] = 8'h41; str_rom[185] = 8'h44;
@@ -318,15 +334,32 @@ module serial_debugger (
         // 236: "\r\ndone\r\n"
         str_rom[236] = 8'h0D; str_rom[237] = 8'h0A; str_rom[238] = 8'h64; str_rom[239] = 8'h6F;
         str_rom[240] = 8'h6E; str_rom[241] = 8'h65; str_rom[242] = 8'h0D; str_rom[243] = 8'h0A;
-        // 244: "\r\nlost\r\n" -- the upload finished but bytes were dropped on the
-        // way in, so the image is wrong rather than absent, and the drive has
-        // been emptied again.  The host is expected to send it once more.
+        // 244: "\r\nlost\r\n"
         str_rom[244] = 8'h0D; str_rom[245] = 8'h0A; str_rom[246] = 8'h6C; str_rom[247] = 8'h6F;
         str_rom[248] = 8'h73; str_rom[249] = 8'h74; str_rom[250] = 8'h0D; str_rom[251] = 8'h0A;
+        // ProDOS Hard Disk image transfer (2 MB):
+        // 252: "\r\nUPLOAD 2097152 bytes, send now\r\n"
+        str_rom[252] = 8'h0D; str_rom[253] = 8'h0A; str_rom[254] = 8'h55; str_rom[255] = 8'h50;
+        str_rom[256] = 8'h4C; str_rom[257] = 8'h4F; str_rom[258] = 8'h41; str_rom[259] = 8'h44;
+        str_rom[260] = 8'h20; str_rom[261] = 8'h32; str_rom[262] = 8'h30; str_rom[263] = 8'h39;
+        str_rom[264] = 8'h37; str_rom[265] = 8'h31; str_rom[266] = 8'h35; str_rom[267] = 8'h32;
+        str_rom[268] = 8'h20; str_rom[269] = 8'h62; str_rom[270] = 8'h79; str_rom[271] = 8'h74;
+        str_rom[272] = 8'h65; str_rom[273] = 8'h73; str_rom[274] = 8'h2C; str_rom[275] = 8'h20;
+        str_rom[276] = 8'h73; str_rom[277] = 8'h65; str_rom[278] = 8'h6E; str_rom[279] = 8'h64;
+        str_rom[280] = 8'h20; str_rom[281] = 8'h6E; str_rom[282] = 8'h6F; str_rom[283] = 8'h77;
+        str_rom[284] = 8'h0D; str_rom[285] = 8'h0A;
+        // 286: "\r\nDOWNLOAD 2097152 bytes\r\n"
+        str_rom[286] = 8'h0D; str_rom[287] = 8'h0A; str_rom[288] = 8'h44; str_rom[289] = 8'h4F;
+        str_rom[290] = 8'h57; str_rom[291] = 8'h4E; str_rom[292] = 8'h4C; str_rom[293] = 8'h4F;
+        str_rom[294] = 8'h41; str_rom[295] = 8'h44; str_rom[296] = 8'h20; str_rom[297] = 8'h32;
+        str_rom[298] = 8'h30; str_rom[299] = 8'h39; str_rom[300] = 8'h37; str_rom[301] = 8'h31;
+        str_rom[302] = 8'h35; str_rom[303] = 8'h32; str_rom[304] = 8'h20; str_rom[305] = 8'h62;
+        str_rom[306] = 8'h79; str_rom[307] = 8'h74; str_rom[308] = 8'h65; str_rom[309] = 8'h73;
+        str_rom[310] = 8'h0D; str_rom[311] = 8'h0A;
     end
 
     // String printer sub-engine
-    reg [7:0] str_pos = 8'd0;
+    reg [8:0] str_pos = 9'd0;
     reg [7:0] str_cnt = 8'd0;
     wire str_busy = (str_cnt != 8'd0);
 
@@ -357,38 +390,54 @@ module serial_debugger (
     localparam M_MEM     = 4'd4;
     localparam M_STATUS  = 4'd5;
     localparam M_SCREEN  = 4'd6;
-    localparam M_IMG     = 4'd7;   // a Disk ][ image, in or out
+    localparam M_IMG     = 4'd7;   // a Disk ][ or ProDOS HD image, in or out
 
-    // A whole disk image, and nothing else: 35 tracks of 16 sectors of 256
-    // bytes, which is the only thing a Disk ][ has ever held.  At 115200 that is
-    // 12.4 seconds each way, which is why there is no framing and no resume --
-    // a transfer that is cut short is simply started again.
+    // Disk ][ image: 143,360 bytes (35 tracks x 16 sectors x 256 bytes)
     localparam [17:0] IMG_BYTES = 18'd143360;
     localparam [17:0] IMG_LAST  = IMG_BYTES - 18'd1;
 
+    // ProDOS Hard Disk image: 2,097,152 bytes (4,096 blocks x 512 bytes)
+    localparam [21:0] IMG_HD_BYTES = 22'd2097152;
+    localparam [20:0] IMG_HD_LAST  = 21'd2097151;
+
     // Which way the bytes are going, and the position in the image.  img_dir is
-    // 0 for the host writing the drive (d) and 1 for the host reading it (e).
-    reg        img_dir  = 1'b0;
-    reg        img_drv  = 1'b0;
-    reg [17:0] img_addr = 18'd0;
+    // 0 for the host writing the drive and 1 for the host reading it.
+    reg        img_dir   = 1'b0;
+    reg        img_drv   = 1'b0;
+    reg        img_is_hd = 1'b0;
+    reg [20:0] img_addr  = 21'd0;
+
     assign img_up_drive = img_drv;
-    assign img_up_addr  = img_addr;
-    assign img_up_last  = (img_addr == IMG_LAST);
+    assign img_up_addr  = img_addr[17:0];
+    assign img_up_last  = (img_addr == {3'd0, IMG_LAST});
     assign img_dn_drive = img_drv;
-    assign img_dn_addr  = img_addr;
-    assign img_dn_last  = (img_addr == IMG_LAST);
+    assign img_dn_addr  = img_addr[17:0];
+    assign img_dn_last  = (img_addr == {3'd0, IMG_LAST});
+
+    assign hd_up_drive  = img_drv;
+    assign hd_up_addr   = img_addr;
+    assign hd_up_last   = (img_addr == IMG_HD_LAST);
+    assign hd_dn_drive  = img_drv;
+    assign hd_dn_addr   = img_addr;
+    assign hd_dn_last   = (img_addr == IMG_HD_LAST);
+
+    wire        active_up_busy  = img_is_hd ? hd_up_busy  : img_up_busy;
+    wire        active_up_done  = img_is_hd ? hd_up_done  : img_up_done;
+    wire        active_up_last  = img_is_hd ? hd_up_last  : img_up_last;
+    wire        active_dn_valid = img_is_hd ? hd_dn_valid : img_dn_valid;
+    wire        active_dn_last  = img_is_hd ? hd_dn_last  : img_dn_last;
+    wire [7:0]  active_dn_data  = img_is_hd ? hd_dn_data  : img_dn_data;
+    wire [21:0] img_target_bytes = img_is_hd ? {1'b0, IMG_HD_BYTES} : {4'd0, IMG_BYTES};
 
     // The byte that has arrived from the host and the flag that says so, and the
-    // flag that says it has been handed to the store.  They are separate because
-    // the store's word write can still be in flight when the next byte arrives,
-    // and the byte in hand is what stops the two from being the same register.
-    reg [7:0] img_byte = 8'h00;
-    reg       img_have = 1'b0;      // a byte has arrived and is waiting
-    reg       img_sent = 1'b0;      // ...and it has been handed over
-    reg       img_ask  = 1'b0;      // a download request is out
-    reg       img_ackq = 1'b0;      // an acknowledgement is waiting for room
-    reg [18:0] img_rx = 19'd0;      // bytes that arrived during the upload
-    reg       img_cmd = 1'b0;      // d or e seen; the next digit picks the drive
+    // flag that says it has been handed to the store.
+    reg [7:0]  img_byte = 8'h00;
+    reg        img_have = 1'b0;      // a byte has arrived and is waiting
+    reg        img_sent = 1'b0;      // ...and it has been handed over
+    reg        img_ask  = 1'b0;      // a download request is out
+    reg        img_ackq = 1'b0;      // an acknowledgement is waiting for room
+    reg [21:0] img_rx   = 22'd0;     // bytes that arrived during the upload
+    reg        img_cmd  = 1'b0;      // command seen; the next digit picks the drive
 
     // Screen dump state. The W command streams the 1 KB text page the video
     // generator is showing, in memory order ($0400/$0800 upward, interleaving
@@ -512,7 +561,8 @@ module serial_debugger (
             scr_flags      <= 8'h00;
             img_dir        <= 1'b0;
             img_drv        <= 1'b0;
-            img_addr       <= 18'd0;
+            img_is_hd      <= 1'b0;
+            img_addr       <= 21'd0;
             img_byte       <= 8'h00;
             img_have       <= 1'b0;
             img_sent       <= 1'b0;
@@ -523,16 +573,21 @@ module serial_debugger (
             img_up_go      <= 1'b0;
             img_up_bad     <= 1'b0;
             img_dn_go      <= 1'b0;
-            img_rx         <= 19'd0;
+            hd_up_data     <= 8'h00;
+            hd_up_go       <= 1'b0;
+            hd_up_bad      <= 1'b0;
+            hd_dn_go       <= 1'b0;
+            img_rx         <= 22'd0;
         end else begin
             fifo_push_en <= 1'b0;
-            // All three requests are one-clock pulses and the store takes one
-            // only while it is free, so they are cleared here and set where they
-            // are wanted rather than being held: a held request would be taken
-            // twice.
+            // All requests are one-clock pulses and the stores take one
+            // only while free, so they are cleared here:
             img_up_go  <= 1'b0;
             img_up_bad <= 1'b0;
             img_dn_go  <= 1'b0;
+            hd_up_go   <= 1'b0;
+            hd_up_bad  <= 1'b0;
+            hd_dn_go   <= 1'b0;
 
             // Debugger CPU Reset Sequencer
             if (reset_timer != 8'd0) begin
@@ -651,31 +706,41 @@ module serial_debugger (
                         main_state <= M_STR;
                     end
 
-                    // d1/d2 take an image into a drive, e1/e2 give one back.
-                    // The letter and the digit are two command bytes, read the
-                    // same way every other command is -- one per visit to idle,
-                    // paced by the host -- because starting the transfer on the
-                    // letter would make the digit the transfer's first byte: the
-                    // banner prints from M_STR and M_IMG consumes input as data.
+                    // d1/d2 upload Disk ][, e1/e2 download Disk ][.
+                    // p1/p2 upload ProDOS HD, o1/o2 download ProDOS HD.
                     "d", "D", "e", "E": begin
-                        img_cmd <= 1'b1;
-                        img_dir <= (rx_byte == "e") || (rx_byte == "E");
+                        img_cmd   <= 1'b1;
+                        img_is_hd <= 1'b0;
+                        img_dir   <= (rx_byte == "e") || (rx_byte == "E");
+                    end
+
+                    "p", "P", "o", "O": begin
+                        img_cmd   <= 1'b1;
+                        img_is_hd <= 1'b1;
+                        img_dir   <= (rx_byte == "o") || (rx_byte == "O");
                     end
 
                     "1", "2": begin
                         if (img_cmd) begin
                             img_cmd    <= 1'b0;
                             img_drv    <= (rx_byte == "2");
-                            img_addr   <= 18'd0;
-                            img_rx     <= 19'd0;
+                            img_addr   <= 21'd0;
+                            img_rx     <= 22'd0;
                             img_have   <= 1'b0;
                             img_sent   <= 1'b0;
                             img_ask    <= 1'b0;
                             img_ackq   <= 1'b0;
                             img_up_go  <= 1'b0;
                             img_dn_go  <= 1'b0;
-                            str_pos    <= img_dir ? STR_DN_START : STR_UP_START;
-                            str_cnt    <= img_dir ? STR_DN_LEN   : STR_UP_LEN;
+                            hd_up_go   <= 1'b0;
+                            hd_dn_go   <= 1'b0;
+                            if (img_is_hd) begin
+                                str_pos <= img_dir ? STR_HD_DN_START : STR_HD_UP_START;
+                                str_cnt <= img_dir ? STR_HD_DN_LEN   : STR_HD_UP_LEN;
+                            end else begin
+                                str_pos <= img_dir ? STR_DN_START : STR_UP_START;
+                                str_cnt <= img_dir ? STR_DN_LEN   : STR_UP_LEN;
+                            end
                             return_job <= M_IMG;
                             main_state <= M_STR;
                         end else if (rx_byte == "1") begin
@@ -1161,82 +1226,71 @@ module serial_debugger (
                 M_IMG: begin
                     if (img_dir == 1'b0) begin
                         // Host to drive.  A byte that has arrived is handed over
-                        // in one go pulse, and the pulse waits for the store to be
+                        // in one go pulse, and the pulse waits for the store/card to be
                         // free: a byte offered while its word write is in flight
                         // is not taken.
                         //
                         // One byte in hand is all there is room for, so the host
-                        // is paced by an acknowledgement for every track taken.
-                        // Without that the host can send faster than the store
-                        // takes and every byte that arrives while the previous one
-                        // is still in hand is dropped, which corrupts an image in
-                        // the middle and still ends with the last byte arriving
-                        // and the drive being marked good.  The count of arrivals
-                        // below is what catches that.
-                        // One acknowledgement per *track*: a track is 4,096 bytes,
-                        // which is the unit a Disk ][ image is made of and 4,096
-                        // is a power of two, so the last byte of one is a slice
-                        // test.  Per word would be the same safety with 71,680
-                        // round trips over a 115200 link, which at 234 clocks a
-                        // byte is 17 million clocks of waiting for a host to keep
-                        // the board's one byte in hand fed.  The host sends a
-                        // track, waits for its acknowledgement, and sends the
-                        // next.
+                        // is paced by an acknowledgement for every track / 4096-byte chunk taken.
+                        // The host sends a 4096-byte chunk, waits for its acknowledgement,
+                        // and sends the next.
                         if (img_sent) begin
-                            if (img_up_done) begin
+                            if (active_up_done) begin
                                 img_sent <= 1'b0;
-                                if (img_up_addr[11:0] == 12'hFFF) begin
+                                if (img_addr[11:0] == 12'hFFF) begin
                                     if (!tx_fifo_full)
                                         fifo_push(8'h06);
                                     else
                                         img_ackq <= 1'b1;
                                 end
-                                img_addr <= img_addr + 18'd1;
-                                if (img_up_last) begin
-                                    // Arrived and taken are counted separately,
-                                    // and the difference is the whole point: a
-                                    // byte that arrives while the one in hand is
+                                img_addr <= img_addr + 21'd1;
+                                if (active_up_last) begin
+                                    // Arrived and taken are counted separately:
+                                    // a byte that arrives while the one in hand is
                                     // still in hand is dropped, and an image with
-                                    // bytes missing in the middle is not an image
-                                    // that failed to arrive, it is one that is
-                                    // wrong.  So the transfer says which it was,
-                                    // and a wrong one leaves the drive empty
-                                    // rather than bootable.
-                                    if (img_rx == {1'b0, img_addr} + 19'd1) begin
+                                    // bytes missing in the middle is wrong.
+                                    if (img_rx == {1'b0, img_addr} + 22'd1) begin
                                         str_pos <= STR_DONE_START;
                                     end else begin
-                                        img_up_bad  <= 1'b1;
-                                        str_pos    <= STR_LOST_START;
+                                        if (img_is_hd) hd_up_bad <= 1'b1;
+                                        else           img_up_bad <= 1'b1;
+                                        str_pos <= STR_LOST_START;
                                     end
-                                    str_cnt    <= (img_rx == {1'b0, img_addr} + 19'd1)
+                                    str_cnt    <= (img_rx == {1'b0, img_addr} + 22'd1)
                                                   ? STR_DONE_LEN : STR_LOST_LEN;
                                     return_job <= M_IDLE;
                                     main_state <= M_STR;
                                 end
                             end
                         end else if (img_have) begin
-                            if (!img_up_busy) begin
-                                img_up_data <= img_byte;
-                                img_up_go   <= 1'b1;
+                            if (!active_up_busy) begin
+                                if (img_is_hd) begin
+                                    hd_up_data <= img_byte;
+                                    hd_up_go   <= 1'b1;
+                                end else begin
+                                    img_up_data <= img_byte;
+                                    img_up_go   <= 1'b1;
+                                end
                                 img_have    <= 1'b0;
                                 img_sent    <= 1'b1;
                             end
                         end
                         if (rx_valid) begin
-                            img_rx <= img_rx + 19'd1;
-                            if (!img_have && (!img_sent || img_up_done)) begin
+                            img_rx <= img_rx + 22'd1;
+                            if (!img_have && (!img_sent || active_up_done)) begin
                                 img_byte <= rx_byte;
                                 img_have <= 1'b1;
                             end
                         end
-                        if ((img_rx >= 19'd143360) && !img_have && !img_sent && (img_addr != 18'd143360)) begin
-                            img_up_bad <= 1'b1;
+                        if ((img_rx >= img_target_bytes) && !img_have && !img_sent && (img_addr != img_target_bytes[20:0])) begin
+                            if (img_is_hd) hd_up_bad <= 1'b1;
+                            else           img_up_bad <= 1'b1;
                             str_pos    <= STR_LOST_START;
                             str_cnt    <= STR_LOST_LEN;
                             return_job <= M_IDLE;
                             main_state <= M_STR;
                         end
-    // The acknowledgement, whenever there is room for it.
+                        // The acknowledgement, whenever there is room for it.
                         if (img_ackq && !tx_fifo_full) begin
                             img_ackq <= 1'b0;
                             fifo_push(8'h06);
@@ -1248,11 +1302,11 @@ module serial_debugger (
                         // paused and the string engine has already finished -- so
                         // the byte that comes back always has somewhere to go.
                         if (img_ask) begin
-                            if (img_dn_valid) begin
+                            if (active_dn_valid) begin
                                 img_ask  <= 1'b0;
-                                img_addr <= img_addr + 18'd1;
-                                fifo_push(img_dn_data);
-                                if (img_dn_last) begin
+                                img_addr <= img_addr + 21'd1;
+                                fifo_push(active_dn_data);
+                                if (active_dn_last) begin
                                     str_pos    <= STR_DONE_START;
                                     str_cnt    <= STR_DONE_LEN;
                                     return_job <= M_IDLE;
@@ -1260,7 +1314,8 @@ module serial_debugger (
                                 end
                             end
                         end else if (!tx_fifo_full) begin
-                            img_dn_go <= 1'b1;
+                            if (img_is_hd) hd_dn_go <= 1'b1;
+                            else           img_dn_go <= 1'b1;
                             img_ask   <= 1'b1;
                         end
                     end

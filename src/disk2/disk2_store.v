@@ -235,12 +235,17 @@ module disk2_store (
     wire        g_low   = ~g_addr[0];
 
     // A group: the low two bits of three sector bytes, or a sector byte's top
-    // six.  A pair is a byte's low two bits in order, the more significant bit
-    // of the pair being the byte's bit 1.  A swap here is invisible to a
-    // testbench that makes the same swap coming back the other way, and
-    // invisible to nothing else: RWTS takes the low two bits of a group as they
-    // stand, so every byte it reconstructs would have its two bits transposed.
-    wire [5:0] g_grp = g_aux ? {g_b0[1:0], g_b1[1:0], g_b2[1:0]} : g_b0[7:2];
+    // six.  Each pair goes on the disk with its two bits transposed: the P6 ROM
+    // and RWTS unpack a group with LSR / ROL / LSR / ROL, which puts the
+    // group's bit 0 into the byte's bit 1 and the group's bit 1 into the byte's
+    // bit 0.  So the group holds {byte bit 0, byte bit 1}.  (Emitting the pair
+    // as it stands passes any bench that transposes on the way back, and hands
+    // the real ROM a boot sector with its low bits wrong: the checksum only
+    // covers the disk bytes, so the read "succeeds" and the code is garbage.)
+    function [1:0] pair2(input [1:0] v);
+        pair2 = {v[0], v[1]};
+    endfunction
+    wire [5:0] g_grp = g_aux ? {pair2(g_b0[1:0]), pair2(g_b1[1:0]), pair2(g_b2[1:0])} : g_b0[7:2];
 
     // 6-and-2 writes each position as its own group XORed with the group
     // before it, and the first position and the checksum are their own groups
@@ -583,15 +588,12 @@ module disk2_store (
         end
     end
 
-    // A pair of a 6-and-2 group put back into a sector byte.  The group stores
-    // the byte's low two bits in order, the more significant bit of the pair
-    // being the byte's bit 1, so this is the identity: it is spelled as a
-    // function because the mistake it exists to prevent -- transposing the pair
-    // here, having transposed it on the way in, or the other way round -- leaves
-    // a sector that reads back perfectly and is wrong.
+    // A pair of a 6-and-2 group put back into a sector byte: the transposition
+    // the read side applies (see pair2), undone.  The two must stay each
+    // other's inverse, and both must match what the ROM's LSR/ROL unpack does.
     function [1:0] unswap2(input [1:0] v);
         begin
-            unswap2 = v;
+            unswap2 = {v[0], v[1]};
         end
     endfunction
 

@@ -57,6 +57,15 @@ module apple2_core (
     input  wire        dsk_store_ack,
     input  wire        dsk_store_idle,
 
+    // ProDOS Slot 7 Hard Disk SDRAM port to aux_ram
+    output wire        hd_store_go,
+    output wire [21:0] hd_store_addr,
+    output wire        hd_store_we,
+    output wire [15:0] hd_store_wdata,
+    input  wire [15:0] hd_store_rdata,
+    input  wire        hd_store_ack,
+    input  wire        hd_store_idle,
+
     // Diagnostic status & Debugger Interface
     input  wire        cpu_rdy,
     input  wire [15:0] dbg_mem_addr,
@@ -83,6 +92,26 @@ module apple2_core (
     output wire [7:0]  img_dn_data,
     output wire        img_dn_valid,
     output wire        img_dn_done,
+
+    // ProDOS Hard Disk image transfer (2 MB per drive)
+    output wire        hd_wr_req,
+    output wire [11:0] hd_wr_blk,
+    input  wire        hd_wr_ack,
+    input  wire        hd_up_go,
+    input  wire        hd_up_drive,
+    input  wire [20:0] hd_up_addr,
+    input  wire [7:0]  hd_up_data,
+    input  wire        hd_up_last,
+    input  wire        hd_up_bad,
+    output wire        hd_up_busy,
+    output wire        hd_up_done,
+    input  wire        hd_dn_go,
+    input  wire        hd_dn_drive,
+    input  wire [20:0] hd_dn_addr,
+    input  wire        hd_dn_last,
+    output wire [7:0]  hd_dn_data,
+    output wire        hd_dn_valid,
+    output wire        hd_dn_done,
     output wire [15:0] debug_cpu_pc,
     output wire [15:0] debug_cpu_addr,
     output wire [7:0]  debug_cpu_dout,
@@ -304,16 +333,13 @@ module apple2_core (
     // Index 5 of a seven-slot vector is slot 6, which is the indexing
     // slot_bus uses throughout.
     wire [7:0]  d2_rom_data;
+    wire [7:0]  prodos_rom_data;
     wire [6:0]  card_present;
-    // A byte per card, so 56 bits wide, not 7, and all 56 of them driven in one
-    // assignment: the byte for the one slot that has a card, and $00 for the six
-    // that do not, which is what an empty slot reads on real hardware.  Left
-    // floating the other 48 bits are not $00 but X, and a second continuous
-    // assignment over the one slice would give that slice two drivers, which
-    // yosys reports as the port driving a constant.
+    // A byte per card, so 56 bits wide, not 7:
+    // Slot 6 (index 5) is Disk ][, Slot 7 (index 6) is ProDOS Hard Disk.
     wire [55:0] card_data;
-    assign card_data = (56'd0 & ~(56'hFF << (5 * 8))) |
-                       ({48'd0, d2_rom_data} << (5 * 8));
+    assign card_data = ({48'd0, d2_rom_data} << (5 * 8)) |
+                       ({48'd0, prodos_rom_data} << (6 * 8));
 
     // The card's registers are on the $C0Ex bus, which the read mux claims
     // after the motherboard's own $C0xx addresses and before the $00 an
@@ -321,6 +347,10 @@ module apple2_core (
     wire [7:0]  d2_io_data;
     wire        d2_io_hit = (effective_cpu_addr[15:8] == 8'hC0) &&
                             (effective_cpu_addr[7:4] == 4'hE);
+
+    wire [7:0]  prodos_io_data;
+    wire        prodos_io_hit = (effective_cpu_addr[15:8] == 8'hC0) &&
+                                (effective_cpu_addr[7:4] == 4'hF);
 
     slot_bus u_slot_bus (
         .clk(clk),
@@ -482,6 +512,9 @@ module apple2_core (
                 // The Disk ][ controller's registers: the data register at Q6L
                 // and Q6, and the floating bus at the rest of $C0E0-$C0EF.
                 cpu_din_comb = d2_io_data;
+            end else if (prodos_io_hit) begin
+                // The ProDOS Hard Disk controller's registers at $C0F0-$C0FF.
+                cpu_din_comb = prodos_io_data;
             end else begin
                 cpu_din_comb = 8'h00;
             end
@@ -543,7 +576,7 @@ module apple2_core (
     wire        d2_wr_drive;
     wire        d2_any_disk;
 
-    assign card_present = 7'b0010000;   // slot 6 and nothing else
+    assign card_present = 7'b1100000;   // slot 7 (bit 6) and slot 6 (bit 5)
     wire [6:0]  d2_dbg_track;
     wire [7:0]  d2_dbg_head;
 
@@ -629,6 +662,50 @@ module apple2_core (
         .dsk_rdata(dsk_store_rdata),
         .dsk_ack(dsk_store_ack),
         .dsk_idle(dsk_store_idle)
+    );
+
+    // ------------------------------------------------------------------
+    // ProDOS Hard Disk controller card, slot 7
+    // ------------------------------------------------------------------
+    prodos_card u_prodos_card (
+        .clk(clk),
+        .reset(reset),
+        .ce_1m(ce_1m),
+        .devsel_n(devsel_n[6]),
+        .iosel_n(iosel_n[6]),
+        .bus_cycle(cpu_go),
+        .cpu_we(cpu_we),
+        .addr(effective_cpu_addr),
+        .cpu_di(cpu_dout),
+        .rom_data(prodos_rom_data),
+        .io_data(prodos_io_data),
+        .hd_go(hd_store_go),
+        .hd_addr(hd_store_addr),
+        .hd_we(hd_store_we),
+        .hd_wdata(hd_store_wdata),
+        .hd_rdata(hd_store_rdata),
+        .hd_ack(hd_store_ack),
+        .hd_idle(hd_store_idle),
+        .wr_req(hd_wr_req),
+        .wr_blk(hd_wr_blk),
+        .wr_ack(hd_wr_ack),
+        .up_go(hd_up_go),
+        .up_drive(hd_up_drive),
+        .up_addr(hd_up_addr),
+        .up_data(hd_up_data),
+        .up_last(hd_up_last),
+        .up_bad(hd_up_bad),
+        .up_busy(hd_up_busy),
+        .up_done(hd_up_done),
+        .down_go(hd_dn_go),
+        .down_drive(hd_dn_drive),
+        .down_addr(hd_dn_addr),
+        .down_last(hd_dn_last),
+        .down_data(hd_dn_data),
+        .down_valid(hd_dn_valid),
+        .down_done(hd_dn_done),
+        .drv_present(),
+        .drv_writable()
     );
 
 endmodule

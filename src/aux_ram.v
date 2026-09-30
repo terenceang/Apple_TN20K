@@ -49,6 +49,15 @@ module aux_ram (
     input  wire [7:0]  wr_data,
     output wire        wr_busy,
 
+    // ProDOS Hard Disk port (src/prodos/prodos_card.v)
+    input  wire        hd_go,
+    input  wire [21:0] hd_addr,
+    input  wire        hd_we,
+    input  wire [15:0] hd_wdata,
+    output wire [15:0] hd_rdata,
+    output wire        hd_ack,
+    output wire        hd_idle,
+
     // Disk ][ image store (src/disk2/disk2_store.v), the lowest-priority
     // client.  A request is latched when dsk_go is pulsed, so a client that
     // asks while the arbiter is busy does not lose it, and dsk_ack pulses when
@@ -100,7 +109,7 @@ module aux_ram (
     );
     assign O_sdram_addr = sd_a13[10:0];
 
-    localparam [2:0] K_REF = 3'd0, K_FILL = 3'd1, K_WR = 3'd2, K_RD = 3'd3, K_DSK = 3'd4;
+    localparam [2:0] K_REF = 3'd0, K_FILL = 3'd1, K_WR = 3'd2, K_RD = 3'd3, K_HD = 3'd4, K_DSK = 3'd5;
 
     // Operation engine
     reg        op_busy = 1'b0;
@@ -135,6 +144,17 @@ module aux_ram (
     reg        rd_stale = 1'b0;      // a write landed while a read was in flight
     assign rd_hit  = cache_valid && (cache_word == rd_addr[15:1]);
     assign rd_data = rd_addr[0] ? cache_data[7:0] : cache_data[15:8];
+
+    // ProDOS Hard Disk port.
+    reg        hd_pend  = 1'b0;
+    reg [21:0] hd_a_q   = 22'd0;
+    reg        hd_we_q  = 1'b0;
+    reg [15:0] hd_d_q   = 16'd0;
+    reg [15:0] hd_r_q   = 16'd0;
+    reg        hd_ack_q = 1'b0;
+    assign hd_idle  = !hd_pend;
+    assign hd_ack   = hd_ack_q;
+    assign hd_rdata = hd_r_q;
 
     // Disk store port.  A request is latched when dsk_go arrives, so the store
     // can pulse one whenever it is ready and the request survives the arbiter
@@ -171,12 +191,22 @@ module aux_ram (
             cache_valid <= 1'b0;
             fill_active <= 1'b0;
             wr_pend     <= 1'b0;
+            hd_pend     <= 1'b0;
+            hd_ack_q    <= 1'b0;
             dsk_pend    <= 1'b0;
             dsk_ack_q   <= 1'b0;
         end
 
-        // A disk-store request is taken whatever the arbiter is doing, and held
-        // until a slot can be given to it.
+        // ProDOS and Disk store requests are taken whatever the arbiter is doing,
+        // and held until a slot can be given to them.
+        hd_ack_q <= 1'b0;
+        if (hd_go) begin
+            hd_pend <= 1'b1;
+            hd_a_q  <= hd_addr;
+            hd_we_q <= hd_we;
+            hd_d_q  <= hd_wdata;
+        end
+
         dsk_ack_q <= 1'b0;
         if (dsk_go) begin
             dsk_pend <= 1'b1;
@@ -217,6 +247,11 @@ module aux_ram (
                         cache_word  <= rd_word_q;
                         cache_valid <= !rd_stale && !wr_pend && !wr_go;
                     end
+                    K_HD: begin
+                        hd_r_q   <= sd_dout;
+                        hd_pend  <= 1'b0;
+                        hd_ack_q <= 1'b1;
+                    end
                     K_DSK: begin
                         dsk_r_q   <= sd_dout;
                         dsk_pend  <= 1'b0;
@@ -245,6 +280,12 @@ module aux_ram (
                 sd_addr <= {7'd0, rd_addr[15:1]};
                 rd_word_q <= rd_addr[15:1];
                 rd_stale <= 1'b0;
+                op_busy <= 1'b1; t <= 3'd0; sd_cs <= 1'b1;
+            end else if (hd_pend) begin
+                kind <= K_HD; sd_refresh <= 1'b0; sd_we <= hd_we_q;
+                sd_ds <= 2'b00;
+                sd_din <= hd_d_q;
+                sd_addr <= hd_a_q;
                 op_busy <= 1'b1; t <= 3'd0; sd_cs <= 1'b1;
             end else if (dsk_pend) begin
                 // Lowest priority: a sector move, which has milliseconds of
