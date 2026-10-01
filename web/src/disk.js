@@ -36,10 +36,7 @@ export const DOS_TO_PHYS = [
  * Physical-to-DOS 3.3 logical sector interleave mapping (reverse of DOS_TO_PHYS).
  * Physical sector P maps to logical sector PHYS_TO_DOS[P].
  */
-export const PHYS_TO_DOS = [
-  0x0, 0x7, 0xe, 0x6, 0xd, 0x5, 0xc, 0x4,
-  0xb, 0x3, 0xa, 0x2, 0x9, 0x1, 0x8, 0xf,
-]
+export const PHYS_TO_DOS = DOS_TO_PHYS.map((_, p) => DOS_TO_PHYS.indexOf(p))
 
 /**
  * Detect disk image format ('prodos' or 'dos') from filename.
@@ -77,51 +74,26 @@ export function validateDiskImage(buffer, filename = '') {
   }
 }
 
-/**
- * Convert a 143,360-byte disk image from DOS 3.3 logical order to ProDOS physical order.
- *
- * @param {Uint8Array} src
- * @returns {Uint8Array}
- */
-export function dosToPhysical(src) {
+/** Move every sector of every track of a 143,360-byte image to the slot `map` gives it. */
+function permuteSectors(src, map) {
   if (src.length !== DISK_BYTES) {
     throw new Error(`Expected ${DISK_BYTES} bytes, got ${src.length}`)
   }
   const dst = new Uint8Array(DISK_BYTES)
   for (let t = 0; t < TRACKS; t++) {
-    const trackOff = t * TRACK_BYTES
-    for (let logSec = 0; logSec < SECTORS_PER_TRACK; logSec++) {
-      const physSec = DOS_TO_PHYS[logSec]
-      const srcSecOff = trackOff + logSec * SECTOR_BYTES
-      const dstSecOff = trackOff + physSec * SECTOR_BYTES
-      dst.set(src.subarray(srcSecOff, srcSecOff + SECTOR_BYTES), dstSecOff)
+    for (let sec = 0; sec < SECTORS_PER_TRACK; sec++) {
+      const from = t * TRACK_BYTES + sec * SECTOR_BYTES
+      dst.set(src.subarray(from, from + SECTOR_BYTES), t * TRACK_BYTES + map[sec] * SECTOR_BYTES)
     }
   }
   return dst
 }
 
-/**
- * Convert a 143,360-byte disk image from ProDOS physical order to DOS 3.3 logical order.
- *
- * @param {Uint8Array} src
- * @returns {Uint8Array}
- */
-export function physicalToDos(src) {
-  if (src.length !== DISK_BYTES) {
-    throw new Error(`Expected ${DISK_BYTES} bytes, got ${src.length}`)
-  }
-  const dst = new Uint8Array(DISK_BYTES)
-  for (let t = 0; t < TRACKS; t++) {
-    const trackOff = t * TRACK_BYTES
-    for (let physSec = 0; physSec < SECTORS_PER_TRACK; physSec++) {
-      const logSec = PHYS_TO_DOS[physSec]
-      const srcSecOff = trackOff + physSec * SECTOR_BYTES
-      const dstSecOff = trackOff + logSec * SECTOR_BYTES
-      dst.set(src.subarray(srcSecOff, srcSecOff + SECTOR_BYTES), dstSecOff)
-    }
-  }
-  return dst
-}
+/** Convert a disk image from DOS 3.3 logical order to ProDOS physical order. */
+export const dosToPhysical = (src) => permuteSectors(src, DOS_TO_PHYS)
+
+/** Convert a disk image from ProDOS physical order to DOS 3.3 logical order. */
+export const physicalToDos = (src) => permuteSectors(src, PHYS_TO_DOS)
 
 /**
  * Prepare raw disk file bytes for upload to the FPGA (translates to physical sector order).
@@ -287,7 +259,56 @@ class LinkStreamReader {
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 /**
- * Upload a 143,360-byte physical disk image to Drive 1 or Drive 2 over Web Serial.
+ * The debugger's image protocol, uploading: `cmd` and the drive digit, wait for the
+ * UPLOAD banner, send `bytes` in `unit`-sized chunks (the board ACKs each), then
+ * wait for "done" or "lost".  `onChunk(n)` is called after chunk n (1-based).
+ */
+async function sendImage(link, cmd, drive, bytes, unit, timeoutMs, onChunk) {
+  const reader = new LinkStreamReader(link)
+  try {
+    link.write([cmd.charCodeAt(0)])
+    await sleep(40)
+    link.write([Number(drive) === 2 ? 0x32 : 0x31]) // '2' or '1'
+    await reader.readUntil('UPLOAD', timeoutMs)
+
+    for (let c = 0; c * unit < bytes.length; c++) {
+      link.write(bytes.subarray(c * unit, (c + 1) * unit))
+      await reader.readAck(timeoutMs)
+      onChunk(c + 1)
+    }
+
+    const decoder = new TextDecoder()
+    await reader.waitFor(() => /done|lost/.test(decoder.decode(reader.buffer)), timeoutMs)
+    if (decoder.decode(reader.buffer).includes('lost')) {
+      throw new Error('Upload failed: FPGA reported bytes lost / dropped in transit.')
+    }
+  } finally {
+    reader.restore()
+  }
+}
+
+/** The matching download: `cmd`, drive digit, DOWNLOAD banner, `size` raw bytes, "done". */
+async function receiveImage(link, cmd, drive, size, timeoutMs, onBytes) {
+  const reader = new LinkStreamReader(link)
+  try {
+    link.write([cmd.charCodeAt(0)])
+    await sleep(40)
+    link.write([Number(drive) === 2 ? 0x32 : 0x31])
+    await reader.readUntil('DOWNLOAD', timeoutMs)
+
+    const bytes = await reader.readBytes(size, onBytes, timeoutMs)
+
+    const decoder = new TextDecoder()
+    await reader.waitFor(() => decoder.decode(reader.buffer).includes('done'), timeoutMs)
+    return bytes
+  } finally {
+    reader.restore()
+  }
+}
+
+/**
+ * Upload a 143,360-byte physical disk image to Drive 1 or Drive 2 over Web Serial
+ * (`d`, then 35 tracks of 4096 bytes, each ACKed).
  *
  * @param {{ write: (b: Uint8Array | number[]) => void, onBytes: (b: Uint8Array) => void }} link
  * @param {1 | 2} drive
@@ -299,57 +320,22 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
  * @returns {Promise<void>}
  */
 export async function uploadDisk(link, drive, physicalBytes, opts = {}) {
-  const drvNum = Number(drive) === 2 ? 2 : 1
-  const drvChar = drvNum === 2 ? '2' : '1'
-  const timeoutMs = opts.timeoutMs ?? 6000
-
   if (!physicalBytes || physicalBytes.length !== DISK_BYTES) {
     throw new Error(`Upload payload must be exactly ${DISK_BYTES} bytes, got ${physicalBytes?.length}`)
   }
-
-  const reader = new LinkStreamReader(link)
-  try {
-    // Send 'd' followed by drive number ('1' or '2')
-    link.write([0x64]) // 'd'
-    await sleep(40)
-    link.write([drvChar.charCodeAt(0)])
-
-    // Wait for the FPGA debugger to enter M_IMG and announce upload:
-    // "\r\nUPLOAD 143360 bytes, send now\r\n"
-    await reader.readUntil('UPLOAD', timeoutMs)
-
-    // Stream 35 tracks of 4096 bytes each
-    for (let t = 0; t < TRACKS; t++) {
-      const trackData = physicalBytes.subarray(t * TRACK_BYTES, (t + 1) * TRACK_BYTES)
-      link.write(trackData)
-      await reader.readAck(timeoutMs)
-      opts.onProgress?.({
-        phase: 'uploading',
-        track: t + 1,
-        totalTracks: TRACKS,
-        bytesSent: (t + 1) * TRACK_BYTES,
-        totalBytes: DISK_BYTES,
-      })
-    }
-
-    // Wait for final response: "\r\ndone\r\n" or "\r\nlost\r\n"
-    const decoder = new TextDecoder()
-    await reader.waitFor(() => {
-      const text = decoder.decode(reader.buffer)
-      return text.includes('done') || text.includes('lost')
-    }, timeoutMs)
-
-    const resultText = decoder.decode(reader.buffer)
-    if (resultText.includes('lost')) {
-      throw new Error('Upload failed: FPGA reported bytes lost / dropped in transit.')
-    }
-  } finally {
-    reader.restore()
-  }
+  await sendImage(link, 'd', drive, physicalBytes, TRACK_BYTES, opts.timeoutMs ?? 6000, (t) =>
+    opts.onProgress?.({
+      phase: 'uploading',
+      track: t,
+      totalTracks: TRACKS,
+      bytesSent: t * TRACK_BYTES,
+      totalBytes: DISK_BYTES,
+    }),
+  )
 }
 
 /**
- * Download a 143,360-byte physical disk image from Drive 1 or Drive 2 over Web Serial.
+ * Download a 143,360-byte physical disk image from Drive 1 or Drive 2 over Web Serial (`e`).
  *
  * @param {{ write: (b: Uint8Array | number[]) => void, onBytes: (b: Uint8Array) => void }} link
  * @param {1 | 2} drive
@@ -359,43 +345,10 @@ export async function uploadDisk(link, drive, physicalBytes, opts = {}) {
  * }} [opts]
  * @returns {Promise<Uint8Array>} Raw 143,360 physical disk image bytes
  */
-export async function downloadDisk(link, drive, opts = {}) {
-  const drvNum = Number(drive) === 2 ? 2 : 1
-  const drvChar = drvNum === 2 ? '2' : '1'
-  const timeoutMs = opts.timeoutMs ?? 6000
-
-  const reader = new LinkStreamReader(link)
-  try {
-    // Send 'e' followed by drive number ('1' or '2')
-    link.write([0x65]) // 'e'
-    await sleep(40)
-    link.write([drvChar.charCodeAt(0)])
-
-    // Wait for the FPGA debugger to announce download:
-    // "\r\nDOWNLOAD 143360 bytes\r\n"
-    await reader.readUntil('DOWNLOAD', timeoutMs)
-
-    // Collect 143,360 bytes
-    const physicalBytes = await reader.readBytes(
-      DISK_BYTES,
-      (bytesReceived) => {
-        opts.onProgress?.({
-          phase: 'downloading',
-          bytesReceived,
-          totalBytes: DISK_BYTES,
-        })
-      },
-      timeoutMs,
-    )
-
-    // Wait for trailing "\r\ndone\r\n"
-    const decoder = new TextDecoder()
-    await reader.waitFor(() => decoder.decode(reader.buffer).includes('done'), timeoutMs)
-
-    return physicalBytes
-  } finally {
-    reader.restore()
-  }
+export function downloadDisk(link, drive, opts = {}) {
+  return receiveImage(link, 'e', drive, DISK_BYTES, opts.timeoutMs ?? 6000, (bytesReceived) =>
+    opts.onProgress?.({ phase: 'downloading', bytesReceived, totalBytes: DISK_BYTES }),
+  )
 }
 
 /**
@@ -492,7 +445,8 @@ export function validateHardDiskImage(buffer, filename = '') {
 }
 
 /**
- * Upload a 2,097,152-byte ProDOS hard disk image to Slot 7 Drive 1 or Drive 2 over Web Serial.
+ * Upload a 2,097,152-byte ProDOS hard disk image to Slot 7 Drive 1 or Drive 2 over Web Serial
+ * (`p`, then 512 chunks of 4096 bytes, each ACKed).
  *
  * @param {{ write: (b: Uint8Array | number[]) => void, onBytes: (b: Uint8Array) => void }} link
  * @param {1 | 2} drive
@@ -504,57 +458,22 @@ export function validateHardDiskImage(buffer, filename = '') {
  * @returns {Promise<void>}
  */
 export async function uploadHardDisk(link, drive, hardDiskBytes, opts = {}) {
-  const drvNum = Number(drive) === 2 ? 2 : 1
-  const drvChar = drvNum === 2 ? '2' : '1'
-  const timeoutMs = opts.timeoutMs ?? 10000
-
   if (!hardDiskBytes || hardDiskBytes.length !== HD_BYTES) {
     throw new Error(`Hard disk upload payload must be exactly ${HD_BYTES} bytes, got ${hardDiskBytes?.length}`)
   }
-
-  const reader = new LinkStreamReader(link)
-  try {
-    // Send 'p' followed by drive number ('1' or '2')
-    link.write([0x70]) // 'p'
-    await sleep(40)
-    link.write([drvChar.charCodeAt(0)])
-
-    // Wait for the FPGA debugger to enter M_IMG and announce upload:
-    // "\r\nUPLOAD 2097152 bytes, send now\r\n"
-    await reader.readUntil('UPLOAD', timeoutMs)
-
-    // Stream 512 chunks of 4096 bytes each
-    for (let c = 0; c < HD_CHUNKS; c++) {
-      const chunkData = hardDiskBytes.subarray(c * HD_CHUNK_BYTES, (c + 1) * HD_CHUNK_BYTES)
-      link.write(chunkData)
-      await reader.readAck(timeoutMs)
-      opts.onProgress?.({
-        phase: 'uploading',
-        chunk: c + 1,
-        totalChunks: HD_CHUNKS,
-        bytesSent: (c + 1) * HD_CHUNK_BYTES,
-        totalBytes: HD_BYTES,
-      })
-    }
-
-    // Wait for final response: "\r\ndone\r\n" or "\r\nlost\r\n"
-    const decoder = new TextDecoder()
-    await reader.waitFor(() => {
-      const text = decoder.decode(reader.buffer)
-      return text.includes('done') || text.includes('lost')
-    }, timeoutMs)
-
-    const resultText = decoder.decode(reader.buffer)
-    if (resultText.includes('lost')) {
-      throw new Error('Upload failed: FPGA reported bytes lost / dropped in transit.')
-    }
-  } finally {
-    reader.restore()
-  }
+  await sendImage(link, 'p', drive, hardDiskBytes, HD_CHUNK_BYTES, opts.timeoutMs ?? 10000, (c) =>
+    opts.onProgress?.({
+      phase: 'uploading',
+      chunk: c,
+      totalChunks: HD_CHUNKS,
+      bytesSent: c * HD_CHUNK_BYTES,
+      totalBytes: HD_BYTES,
+    }),
+  )
 }
 
 /**
- * Download a 2,097,152-byte ProDOS hard disk image from Slot 7 Drive 1 or Drive 2 over Web Serial.
+ * Download a 2,097,152-byte ProDOS hard disk image from Slot 7 Drive 1 or Drive 2 over Web Serial (`o`).
  *
  * @param {{ write: (b: Uint8Array | number[]) => void, onBytes: (b: Uint8Array) => void }} link
  * @param {1 | 2} drive
@@ -564,41 +483,8 @@ export async function uploadHardDisk(link, drive, hardDiskBytes, opts = {}) {
  * }} [opts]
  * @returns {Promise<Uint8Array>} Raw 2,097,152 byte ProDOS hard disk image bytes
  */
-export async function downloadHardDisk(link, drive, opts = {}) {
-  const drvNum = Number(drive) === 2 ? 2 : 1
-  const drvChar = drvNum === 2 ? '2' : '1'
-  const timeoutMs = opts.timeoutMs ?? 10000
-
-  const reader = new LinkStreamReader(link)
-  try {
-    // Send 'o' followed by drive number ('1' or '2')
-    link.write([0x6f]) // 'o'
-    await sleep(40)
-    link.write([drvChar.charCodeAt(0)])
-
-    // Wait for the FPGA debugger to announce download:
-    // "\r\nDOWNLOAD 2097152 bytes\r\n"
-    await reader.readUntil('DOWNLOAD', timeoutMs)
-
-    // Collect 2,097,152 bytes
-    const hardDiskBytes = await reader.readBytes(
-      HD_BYTES,
-      (bytesReceived) => {
-        opts.onProgress?.({
-          phase: 'downloading',
-          bytesReceived,
-          totalBytes: HD_BYTES,
-        })
-      },
-      timeoutMs,
-    )
-
-    // Wait for trailing "\r\ndone\r\n"
-    const decoder = new TextDecoder()
-    await reader.waitFor(() => decoder.decode(reader.buffer).includes('done'), timeoutMs)
-
-    return hardDiskBytes
-  } finally {
-    reader.restore()
-  }
+export function downloadHardDisk(link, drive, opts = {}) {
+  return receiveImage(link, 'o', drive, HD_BYTES, opts.timeoutMs ?? 10000, (bytesReceived) =>
+    opts.onProgress?.({ phase: 'downloading', bytesReceived, totalBytes: HD_BYTES }),
+  )
 }

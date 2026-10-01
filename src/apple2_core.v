@@ -556,22 +556,15 @@ module apple2_core (
     wire [8:0]  d2_grp_off;
     wire [5:0]  d2_grp_val;
     wire        d2_grp_ack;
-    // The tag a group request is answered for, and the tag a written byte
-    // belongs to.  They carry the same three signals today -- the head is in one
-    // place -- but they are two ports of two modules, so they get two sets of
-    // wires rather than one wire with a driver on it from each end.
-    wire [3:0]  d2_grp_sec;
-    wire [8:0]  d2_grp_track;
-    wire        d2_grp_drive;
+    wire [3:0]  d2_pos_sec;     // where the head is: the tag for both a
+    wire [8:0]  d2_pos_track;   // group request and a written byte
+    wire        d2_pos_drive;
     wire [1:0]  d2_drv_present;
     wire [1:0]  d2_drv_writable;
     wire        d2_wr_seen;
     wire [7:0]  d2_wr_byte;
     wire        d2_wr_in_data;
     wire [8:0]  d2_wr_off;
-    wire [3:0]  d2_wr_sec;
-    wire [8:0]  d2_wr_track;   // 0..34, the track under the head
-    wire        d2_wr_drive;
     wire        d2_any_disk;
 
     assign card_present = 7'b1100000;   // slot 7 (bit 6) and slot 6 (bit 5)
@@ -593,18 +586,15 @@ module apple2_core (
         .io_data(d2_io_data),
         .grp_req(d2_grp_req),
         .grp_off(d2_grp_off),
-        .grp_sec(d2_grp_sec),
-        .grp_track(d2_grp_track),
-        .grp_drive(d2_grp_drive),
+        .pos_sec(d2_pos_sec),
+        .pos_track(d2_pos_track),
+        .pos_drive(d2_pos_drive),
         .grp_val(d2_grp_val),
         .grp_ack(d2_grp_ack),
         .store_wr_seen(d2_wr_seen),
         .store_wr_byte(d2_wr_byte),
         .store_wr_data(d2_wr_in_data),
         .store_wr_off(d2_wr_off),
-        .store_wr_sec(d2_wr_sec),
-        .store_wr_track(d2_wr_track),
-        .store_wr_drive(d2_wr_drive),
         .store_drv_present(d2_drv_present),
         .store_drv_writable(d2_drv_writable),
         .dbg_track(d2_dbg_track),
@@ -623,18 +613,15 @@ module apple2_core (
         .reset(reset),
         .grp_req(d2_grp_req),
         .grp_off(d2_grp_off),
-        .grp_sec(d2_grp_sec),
-        .grp_track(d2_grp_track),
-        .grp_drive(d2_grp_drive),
+        .pos_sec(d2_pos_sec),
+        .pos_track(d2_pos_track),
+        .pos_drive(d2_pos_drive),
         .grp_val(d2_grp_val),
         .grp_ack(d2_grp_ack),
         .wr_seen(d2_wr_seen),
         .wr_byte(d2_wr_byte),
         .wr_in_data(d2_wr_in_data),
         .wr_off(d2_wr_off),
-        .wr_sec(d2_wr_sec),
-        .wr_track(d2_wr_track),
-        .wr_drive(d2_wr_drive),
         .drv_present(d2_drv_present),
         .drv_writable(d2_drv_writable),
         .up_go(img_up_go),
@@ -652,8 +639,6 @@ module apple2_core (
         .down_data(img_dn_data),
         .down_valid(img_dn_valid),
         .down_done(img_dn_done),
-        .dbg_present(),
-        .dbg_track(),
         .dsk_go(dsk_store_go),
         .dsk_addr(dsk_store_addr),
         .dsk_we(dsk_store_we),

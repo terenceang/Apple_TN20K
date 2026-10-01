@@ -180,6 +180,33 @@ function [7:0] a44_decode(input [7:0] hi, input [7:0] lo);
     end
 endfunction
 
+// The two bits of a sector byte that ride in an auxiliary group go on the disk
+// transposed: the P6 ROM and RWTS unpack a group with LSR / ROL / LSR / ROL,
+// which puts the group's bit 0 into the byte's bit 1 and the group's bit 1 into
+// the byte's bit 0.  So the group holds {byte bit 0, byte bit 1}.  Emitting the
+// pair as it stands passes any bench that transposes on the way back and hands
+// the real ROM a boot sector with its low bits wrong (the checksum only covers
+// the disk bytes, so the read "succeeds").  A swap is its own inverse, so the
+// store's read side (encode) and write side (decode) both call this one function.
+function [1:0] gcr_pair_swap(input [1:0] v);
+    begin
+        gcr_pair_swap = {v[0], v[1]};
+    end
+endfunction
+
+// The sector byte that source n of auxiliary position k (0..85) carries the low
+// two bits of: 172+k, 86+k and k.  The first is past byte 255 for k = 85, which is
+// the pair 6-and-2 drops, so a caller range-checks the result.
+function [8:0] gcr_aux_src(input [1:0] n, input [8:0] k);
+    begin
+        case (n)
+            2'd0:    gcr_aux_src = 9'd172 + k;
+            2'd1:    gcr_aux_src = 9'd86  + k;
+            default: gcr_aux_src = k;
+        endcase
+    end
+endfunction
+
 // A data field: 86 low-bits bytes, then 256 data bytes, then the checksum byte.
 // 343, which is what RWTS reads and what a ProDOS-order image stores per sector.
 `define GCR_AUX_N     86

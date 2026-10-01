@@ -61,14 +61,11 @@ module disk2_store (
     // two halves of 6-and-2 then live on the same side of the port: this module
     // encodes what the card reads and decodes what the card writes.
     //
-    // The request names the field offset 0..342 and nothing else: the sector it
-    // belongs to is latched with it, because the play head can move on while the
-    // answer is being fetched.
+    // The request names the field offset 0..342; the sector it belongs to is
+    // the head position below, latched with it because the play head can move on
+    // while the answer is being fetched.
     input  wire        grp_req,       // the card wants grp_off's value
     input  wire [8:0]  grp_off,
-    input  wire [3:0]  grp_sec,       // the sector the head was on
-    input  wire [8:0]  grp_track,
-    input  wire        grp_drive,
     output reg  [5:0]  grp_val,       // the six-bit value
     output reg         grp_ack,       // ...and this is it
 
@@ -79,9 +76,11 @@ module disk2_store (
     input  wire [7:0]  wr_byte,
     input  wire        wr_in_data,    // ...inside a data field
     input  wire [8:0]  wr_off,        // where in that field, 0..342
-    input  wire [3:0]  wr_sec,        // the sector being written
-    input  wire [8:0]  wr_track,
-    input  wire        wr_drive,
+
+    // Where the head is: the sector, track and drive both ports above refer to
+    input  wire [3:0]  pos_sec,
+    input  wire [8:0]  pos_track,
+    input  wire        pos_drive,
     output wire [1:0]  drv_present,   // a drive holds an image
     output wire [1:0]  drv_writable,  // ...and it is writable
 
@@ -104,10 +103,6 @@ module disk2_store (
     output reg         down_valid,    // down_data is good
     output reg         down_done,     // down_last and it has been served
 
-    // The debugger's view of the drives
-    output wire        dbg_present,   // some drive holds an image
-    output wire [8:0]  dbg_track,     // ...and this is where
-
     // SDRAM port to aux_ram's arbiter (src/aux_ram.v), lowest priority
     output reg         dsk_go,        // request a slot; addr/we/wdata are set
     output reg  [21:0] dsk_addr,
@@ -126,6 +121,11 @@ module disk2_store (
     localparam integer NTRACKS    = 35;
     localparam integer DRIVE_BYTES = NTRACKS * 16 * SEC_BYTES;   // 143,360
 
+    // Byte address of a drive's image within the store's bank.
+    function [18:0] drv_base(input drv);
+        drv_base = drv ? DRIVE_BYTES : 0;
+    endfunction
+
     // Whether a drive holds an image.  Until one is uploaded a drive reads as
     // empty, which is what makes the card report it write protected: a format
     // goes nowhere rather than into unwritten memory.
@@ -142,8 +142,6 @@ module disk2_store (
     assign drv_present[1]  = present[1];
     assign drv_writable[0] = present[0] && writable_q[0];
     assign drv_writable[1] = present[1] && writable_q[1];
-    assign dbg_present = present[0] || present[1];
-    assign dbg_track  = 9'd0;
 
     // ------------------------------------------------------------------
     // The SDRAM engine
@@ -171,8 +169,6 @@ module disk2_store (
                                        // usefully remember
     reg        want_low = 1'b0;        // which half the card asked for
 
-    // The write-back keeps its own next to its buffer.
-
     // ------------------------------------------------------------------
     // The card's group fetch
     // ------------------------------------------------------------------
@@ -184,15 +180,18 @@ module disk2_store (
     // cache already holds costs nothing, and the two bytes of a source are
     // adjacent, so the second is nearly always the one just fetched.
     //
-    // Six steps, two groups of three.  Step 2s is source s of this position and
-    // step 2s+1 is source s of the one before it.
-    localparam [2:0] G_STEPS = 3'd6;   // done
+    // A position's group has at most three sources, one per step (g_step 0..2);
+    // the XOR with the position before uses the group kept in g_prevgrp, so the
+    // previous position's sources are not fetched again.
+    localparam [2:0] G_DONE     = 3'd6;   // no request in flight
+    localparam [2:0] G_LAST_AUX = 3'd2;   // an auxiliary group: steps 0, 1, 2
+    localparam [2:0] G_LAST_DAT = 3'd0;   // a data group: step 0 only
 
     reg [8:0]  g_want = 9'd0;          // the offset in flight
     reg [3:0]  g_wsec = 4'd0;          // ...and the sector it was asked about
     reg [8:0]  g_wtrk = 9'd0;
     reg        g_wdrv = 1'b0;
-    reg [2:0]  g_step = G_STEPS;       // which byte is next
+    reg [2:0]  g_step = G_DONE;         // which byte is next
     reg [7:0]  g_b0 = 8'd0, g_b1 = 8'd0, g_b2 = 8'd0;
     reg        g_run = 1'b0;           // a request is being served
     reg [5:0]  g_prevgrp = 6'd0;      // the group the position before was made of
@@ -206,46 +205,24 @@ module disk2_store (
     wire       g_aux = (g_want < `GCR_AUX_N);
     wire       g_par = (g_want == `GCR_PAR_OFF);
 
-    reg  [8:0] g_addr;
-    reg  [1:0] g_last;
-    always @(*) begin
-        if (g_aux) begin
-            case (g_step)
-                3'd0:    g_addr = 9'd172 + g_want;
-                3'd1:    g_addr = 9'd86  + g_want;
-                default: g_addr = g_want;
-            endcase
-            g_last = G_STEPS;
-        end else begin
-            // A data position is one sector byte's top six, and its number in
-            // the sector is its position in the field less the 86 that came
-            // before it.  The checksum is the last of those again, so it is
-            // byte 255's top six.
-            g_addr = g_par ? 9'd255 : (g_want - `GCR_DATA_OFF);
-            g_last = 3'd0;
-        end
-    end
-    wire       g_need = (g_step <= g_last) && (g_addr < 9'd256);
+    // A data position is one sector byte's top six, and its number in the
+    // sector is its position in the field less the 86 that came before it.  The
+    // checksum is the last of those again, so it is byte 255's top six.
+    wire [8:0] g_addr = g_aux ? gcr_aux_src(g_step[1:0], g_want)
+                      : g_par ? 9'd255 : (g_want - `GCR_DATA_OFF);
+    wire [2:0] g_last = g_aux ? G_LAST_AUX : G_LAST_DAT;
+    wire       g_need = (g_step <= g_last) && (g_addr < SEC_BYTES);
 
     // The word that byte is in, as a byte address in a drive, and which half of
     // it the byte is.
-    wire [18:0] g_waddr = (g_wdrv ? DRIVE_BYTES : 0)
-                        + {1'b0, g_wtrk[5:0], g_wsec, g_addr[7:0]};
+    wire [18:0] g_waddr = drv_base(g_wdrv) + {1'b0, g_wtrk[5:0], g_wsec, g_addr[7:0]};
     wire [18:0] g_even  = {g_waddr[18:1], 1'b0};
     wire        g_low   = ~g_addr[0];
 
-    // A group: the low two bits of three sector bytes, or a sector byte's top
-    // six.  Each pair goes on the disk with its two bits transposed: the P6 ROM
-    // and RWTS unpack a group with LSR / ROL / LSR / ROL, which puts the
-    // group's bit 0 into the byte's bit 1 and the group's bit 1 into the byte's
-    // bit 0.  So the group holds {byte bit 0, byte bit 1}.  (Emitting the pair
-    // as it stands passes any bench that transposes on the way back, and hands
-    // the real ROM a boot sector with its low bits wrong: the checksum only
-    // covers the disk bytes, so the read "succeeds" and the code is garbage.)
-    function [1:0] pair2(input [1:0] v);
-        pair2 = {v[0], v[1]};
-    endfunction
-    wire [5:0] g_grp = g_aux ? {pair2(g_b0[1:0]), pair2(g_b1[1:0]), pair2(g_b2[1:0])} : g_b0[7:2];
+    // A group: the low two bits of three sector bytes (transposed, see
+    // gcr_pair_swap), or a sector byte's top six.
+    wire [5:0] g_grp = g_aux ? {gcr_pair_swap(g_b0[1:0]), gcr_pair_swap(g_b1[1:0]),
+                                gcr_pair_swap(g_b2[1:0])} : g_b0[7:2];
 
     // 6-and-2 writes each position as its own group XORed with the group
     // before it, and the first position and the checksum are their own groups
@@ -257,7 +234,6 @@ module disk2_store (
     // bytes as it reads them, which telescopes to the group at each position
     // whichever of the two chains a field was written with.
     wire [5:0] g_val = (g_want == 9'd0 || g_par) ? g_grp : (g_grp ^ g_prevgrp);
-
 
     // The SDRAM address for a byte address in a drive.  The controller splits
     // it as addr[21:20] = bank, addr[19:9] = row, addr[8:1] = column and addr[0]
@@ -303,20 +279,13 @@ module disk2_store (
     reg [7:0]  up_hold  = 8'h00;
     reg        up_have  = 1'b0;
 
-    // The SDRAM address for a byte address in a drive.  The controller splits
-    // it as addr[21:20] = bank, addr[19:9] = row, addr[8:1] = column, addr[0]
-    // = which 16-bit half, and ds from the byte.  Both halves of a word always
-    // travel together, so the store only ever asks for whole words: the address
-    // it issues is the byte address shifted down by one.  Bank 1, which aux RAM
-    // never touches, so the 20 bits below the bank are {0, 18 bits}.
-    //
     // The upload is told which drive and which byte it is on, every byte, rather
     // than being given a start and left to count: the debugger drives both and
     // holds them for a whole transfer, and a store that counted would have to be
     // primed from somewhere and would keep counting through a second transfer
     // into the first one's place.
-    wire [18:0] ba_up   = (up_drive  ? DRIVE_BYTES : 0) + {up_addr[17:1], 1'b0};
-    wire [18:0] ba_dn   = (down_drive ? DRIVE_BYTES : 0) + {down_addr[17:1], 1'b0};
+    wire [18:0] ba_up   = drv_base(up_drive)   + {up_addr[17:1], 1'b0};
+    wire [18:0] ba_dn   = drv_base(down_drive) + {down_addr[17:1], 1'b0};
     wire        up_low  = ~up_addr[0];
 
     // Whether the download's word is the one in hand, so a download that walks
@@ -381,9 +350,9 @@ module disk2_store (
                 // cleared because the steps that want nothing are the ones whose
                 // value is zero.
                 g_want <= grp_off;
-                g_wsec <= grp_sec;
-                g_wtrk <= grp_track;
-                g_wdrv <= grp_drive;
+                g_wsec <= pos_sec;
+                g_wtrk <= pos_track;
+                g_wdrv <= pos_drive;
                 g_step <= 3'd0;
                 g_run  <= 1'b1;
                 g_b0   <= 8'd0; g_b1 <= 8'd0; g_b2 <= 8'd0;
@@ -580,29 +549,19 @@ module disk2_store (
         wr_c = 9'd0;
         wr_d = 9'd0;
         if (wr_off < `GCR_AUX_N) begin
-            wr_a = 9'd172 + wr_off;
-            wr_b = 9'd86  + wr_off;
-            wr_c = wr_off;
+            wr_a = gcr_aux_src(2'd0, wr_off);
+            wr_b = gcr_aux_src(2'd1, wr_off);
+            wr_c = gcr_aux_src(2'd2, wr_off);
         end else if (wr_off < `GCR_PAR_OFF) begin
             wr_d = wr_off - `GCR_DATA_OFF;
         end
     end
 
-    // A pair of a 6-and-2 group put back into a sector byte: the transposition
-    // the read side applies (see pair2), undone.  The two must stay each
-    // other's inverse, and both must match what the ROM's LSR/ROL unpack does.
-    function [1:0] unswap2(input [1:0] v);
-        begin
-            unswap2 = {v[0], v[1]};
-        end
-    endfunction
-
     // Where the word that sector bytes n-1 and n make lives, as a byte address
     // in a drive.  A sector is 16 sectors of 256 bytes and a track is 16 of
     // those, so the whole thing is shifts, and the byte index is even because a
     // word always starts on an even byte.
-    wire [18:0] wr_sector = (wr_drive ? DRIVE_BYTES : 0)
-                          + {wr_track[5:0], wr_sec, 8'd0};
+    wire [18:0] wr_sector = drv_base(pos_drive) + {pos_track[5:0], pos_sec, 8'd0};
 
     always @(posedge clk or posedge reset) begin
         if (reset) begin
@@ -621,9 +580,9 @@ module disk2_store (
                     // The two groups that would land past sector byte 255 are the
                     // two the encoding drops, and they arrive as zeros, so they
                     // are left out rather than wrapped onto byte 0.
-                    if (wr_a < 9'd256) wr_lo[wr_a[7:0]] <= unswap2(wr_cur[5:4]);
-                    wr_lo[wr_b[7:0]] <= unswap2(wr_cur[3:2]);
-                    wr_lo[wr_c[7:0]] <= unswap2(wr_cur[1:0]);
+                    if (wr_a < SEC_BYTES) wr_lo[wr_a[7:0]] <= gcr_pair_swap(wr_cur[5:4]);
+                    wr_lo[wr_b[7:0]] <= gcr_pair_swap(wr_cur[3:2]);
+                    wr_lo[wr_c[7:0]] <= gcr_pair_swap(wr_cur[1:0]);
                 end else if (wr_off < `GCR_PAR_OFF) begin
                     if (wr_d[0] == 1'b0) begin
                         // The low half of the word: wait for its partner.

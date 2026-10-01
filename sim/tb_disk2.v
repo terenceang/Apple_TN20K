@@ -133,18 +133,13 @@ module tb_disk2;
     wire [8:0]  grp_off;
     wire [5:0]  grp_val;
     wire        grp_ack;
-    // The tag a group is asked for, and the tag a written byte is reported
-    // under, as separate wires for the same reason the core has two sets.
-    wire [3:0]  grp_sec;
-    wire [8:0]  grp_track;
-    wire        grp_drive;
+    wire [3:0]  pos_sec;
+    wire [8:0]  pos_track;
+    wire        pos_drive;
     wire        wr_seen;
     wire [7:0]  wr_byte;
     wire        wr_in_data;
     wire [8:0]  wr_off;
-    wire [3:0]  wr_sec;
-    wire [8:0]  wr_track;
-    wire        wr_drive;
     wire [1:0]  drv_present;
     wire [1:0]  drv_writable;
     wire [6:0]  dbg_track;
@@ -158,12 +153,11 @@ module tb_disk2;
         .devsel_n(devsel_n), .iosel_n(1'b1),
         .bus_cycle(bus_cycle), .cpu_we(cpu_we), .addr(addr), .cpu_di(cpu_di),
         .rom_data(rom_data), .io_data(io_data),
-        .grp_req(grp_req), .grp_off(grp_off), .grp_sec(grp_sec),
-        .grp_track(grp_track), .grp_drive(grp_drive),
+        .grp_req(grp_req), .grp_off(grp_off), .pos_sec(pos_sec),
+        .pos_track(pos_track), .pos_drive(pos_drive),
         .grp_val(grp_val), .grp_ack(grp_ack),
         .store_wr_seen(wr_seen), .store_wr_byte(wr_byte), .store_wr_data(wr_in_data),
-        .store_wr_off(wr_off), .store_wr_sec(wr_sec), .store_wr_track(wr_track),
-        .store_wr_drive(wr_drive),
+        .store_wr_off(wr_off),
         .store_drv_present(drv_present), .store_drv_writable(drv_writable),
         .dbg_track(dbg_track), .dbg_head(dbg_head),
         .dbg_playsel(dbg_playsel), .dbg_playoff(dbg_playoff),
@@ -236,17 +230,16 @@ module tb_disk2;
     // The store
     disk2_store u_store (
         .clk(clk), .reset(reset),
-        .grp_req(grp_req), .grp_off(grp_off), .grp_sec(grp_sec),
-        .grp_track(grp_track), .grp_drive(grp_drive),
+        .grp_req(grp_req), .grp_off(grp_off), .pos_sec(pos_sec),
+        .pos_track(pos_track), .pos_drive(pos_drive),
         .grp_val(grp_val), .grp_ack(grp_ack),
         .wr_seen(wr_seen), .wr_byte(wr_byte), .wr_in_data(wr_in_data),
-        .wr_off(wr_off), .wr_sec(wr_sec), .wr_track(wr_track), .wr_drive(wr_drive),
+        .wr_off(wr_off),
         .drv_present(drv_present), .drv_writable(drv_writable),
         .up_go(1'b0), .up_drive(1'b0), .up_addr(18'd0), .up_data(8'h00),
         .up_last(1'b0), .up_busy(), .up_done(),
         .down_go(1'b0), .down_drive(1'b0), .down_addr(18'd0), .down_last(1'b0),
         .down_data(), .down_valid(), .down_done(),
-        .dbg_present(), .dbg_track(),
         .dsk_go(dsk_go), .dsk_addr(dsk_addr), .dsk_we(dsk_we), .dsk_wdata(dsk_wdata),
         .dsk_rdata(dsk_rdata), .dsk_ack(dsk_ack), .dsk_idle(dsk_idle)
     );

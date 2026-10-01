@@ -34,27 +34,12 @@
 //
 // The stepper
 // ----------
-// Four phase lines, each latched by an access to $C0E0-$C0E3, and a magnet
-// that pulls the head to one of four rotor positions.  A real head moves one
-// quarter-track per pulse; this one moves one whole track per DOS seek
-// sequence, which is four pulses, with the direction taken from the phase
-// transitions inside the sequence: a successor step means out, a predecessor
-// step means in.
-//
-// Whole tracks rather than quarter-tracks is a deliberate simplification.
-// Quarter-tracking is what lets a protection routine count phase pulses to
-// find a half-track, and nothing else on a 5.25" disk cares: DOS 3.3, ProDOS
-// and every other filesystem seek in whole tracks, so the difference is only
-// observable to code that drives the phases itself, which is out of scope.
-// What does have to be right is that a seek lands exactly where it was asked
-// to, in both directions, and that recalibration -- the in-sequence repeated
-// until the head stops -- lands on track 0, because DOS does that before every
-// multi-track seek.  One track per four pulses gives both.
-//
-// The direction cannot come from the phase itself, because a stepper's phases
-// are not a compass: DOS's out-sequence is 0-1-2-3 and its in-sequence is
-// 1-0-3-2, and under any "this phase means forward" rule the first of them
-// nets zero, because it is symmetric.
+// Four phase lines, each latched by an access to $C0E0-$C0E7, and a head that
+// moves one half-track toward whichever neighbouring phase is energised when a
+// phase comes on.  DOS moves a track with two such steps and recalibrates with
+// 80 steps inward against the stop, so a seek to track N is 2N half-tracks.  The
+// head's position is reported in whole tracks, which is all DOS, ProDOS and
+// every other filesystem use.  The details are at the stepper below.
 //
 // Writes
 // ------
@@ -103,18 +88,15 @@ module disk2_card (
     // self-sync byte, and RWTS resyncs on the next field.
     output wire        grp_req,       // the card wants grp_off's value
     output wire [8:0]  grp_off,
-    output wire [3:0]  grp_sec,       // the sector the head is on, 0..15
-    output wire [8:0]  grp_track,     // 0..34, the track under the head
-    output wire        grp_drive,     // 0 = drive 1
+    output wire [3:0]  pos_sec,       // where the head is, for the store: the sector 0..15,
+    output wire [8:0]  pos_track,     //   the track 0..34 under the head,
+    output wire        pos_drive,     //   and the drive (0 = drive 1)
     input  wire [5:0]  grp_val,       // the six-bit value
     input  wire        grp_ack,       // ...and this is it
     output wire        store_wr_seen, // a disk byte entered the stream
     output wire [7:0]  store_wr_byte, // ...and this is it
     output wire        store_wr_data, // ...inside a data field
     output wire [8:0]  store_wr_off,  // where in that field, 0..342
-    output wire [3:0]  store_wr_sec,  // the sector being written
-    output wire [8:0]  store_wr_track,
-    output wire        store_wr_drive,
     input  wire [1:0]  store_drv_present, // a drive holds an image
     input  wire [1:0]  store_drv_writable,// ...and it is writable
 
@@ -167,12 +149,15 @@ module disk2_card (
     reg        drive_q = 1'b0;      // 0 = drive 1
     reg [7:0]  head_q  = 8'd0;     // the track under the head, 0..34
     reg        wr_mode_q = 1'b0;   // Q7: the read/write mode select
-    reg [7:0]  shreg      = 8'hFF; // the shift register (write mode)
     reg        started    = 1'b0;  // the first tick after reset presents byte 0 without moving on
     reg        rdy_q      = 1'b0;  // a byte has arrived under the head and has not been read
     reg [7:0]  wr_latch   = 8'h00; // the write-mode data register
 
     localparam [7:0] TRACK_MAX = 8'd34;
+    localparam [7:0] VOLUME    = 8'hFE;   // DOS 3.3 volumes are $FE
+
+    // The head position the store and the address field work from.
+    wire [5:0] trk = head_q[5:0];
 
     assign dbg_track  = head_q[6:0];
     assign dbg_head   = head_q;
@@ -180,30 +165,8 @@ module disk2_card (
     assign dbg_drive  = drive_q;
     assign dbg_wr_mode= wr_mode_q;
 
-    // The stepper.
-    //
-    // Four phase lines, each latched by an access to $C0E0-$C0E3, and a magnet
-    // that pulls the head to one of four rotor positions.  A real head moves
-    // one quarter-track per pulse; this one moves one whole track per DOS
-    // seek sequence, which is four pulses, with the direction taken from the
-    // phase transitions inside that sequence: a successor step means out, a
-    // predecessor step means in.
-    //
-    // Whole tracks rather than quarter-tracks is a deliberate simplification.
-    // Quarter-tracking is what lets a protection routine count phase pulses to
-    // find a half-track, and nothing else on a 5.25" disk cares: DOS 3.3,
-    // ProDOS and every other filesystem seek in whole tracks, and the
-    // difference is only observable to code that drives the phases itself.
-    // What does have to be right is that a seek lands exactly where it was
-    // asked to, in both directions, and that recalibration -- the in-sequence
-    // repeated until the head stops -- lands on track 0, because DOS does that
-    // before every multi-track seek.  One track per four pulses gives both.
-    //
-    // The direction cannot come from the phase itself, because a stepper's
-    // phases are not a compass: DOS's out-sequence is 0-1-2-3 and its in-sequence
-    // is 1-0-3-2, and under any "this phase means forward" rule the first of
-    // them nets zero, because it is symmetric.
-    // The stepper, as the hardware does it: each phase has an off address and
+    // The stepper (see the header).
+    // Each phase has an off address and
     // an on address, and the head moves one half-track toward the neighbouring
     // phase that is energised when a phase comes on.  DOS moves a track with two
     // such steps (on the next phase, off the previous one, twice), so a seek to
@@ -268,7 +231,7 @@ module disk2_card (
     //   D5 AA AD      address mark: data
     //   343 bytes     the 256 data bytes, six-and-two encoded
     //   DE AA EB      data tail
-    //   27 x $FF      inter-sector gap
+    //   23 x $FF      inter-sector gap
     //
     // 48+3+8+3+6+3+343+3+23 = 440 bytes per sector, 7040 per track.
     localparam integer SHIFT_CLKS = 33;   // 32.26 us at ce_1m
@@ -284,6 +247,7 @@ module disk2_card (
 
     reg [12:0] track_pos = 13'd0;          // byte position around the track
     reg [5:0]  shift_cnt = 6'd0;
+    wire [12:0] track_nx = (track_pos >= TRACK_LEN - 1) ? 13'd0 : track_pos + 1'b1;
 
     // Which sector the stream is playing, and where in it: track_pos / 440,
     // as a chain of comparisons (440 is not a power of two, and a real divider
@@ -293,38 +257,40 @@ module disk2_card (
     // through sixteen comparisons is exactly the shape iverilog sometimes
     // leaves at its initial X.
     wire [4:0] play_sec =
-          (track_pos >= 13'd6600) ? 5'd15 :
-          (track_pos >= 13'd6160) ? 5'd14 :
-          (track_pos >= 13'd5720) ? 5'd13 :
-          (track_pos >= 13'd5280) ? 5'd12 :
-          (track_pos >= 13'd4840) ? 5'd11 :
-          (track_pos >= 13'd4400) ? 5'd10 :
-          (track_pos >= 13'd3960) ? 5'd9  :
-          (track_pos >= 13'd3520) ? 5'd8  :
-          (track_pos >= 13'd3080) ? 5'd7  :
-          (track_pos >= 13'd2640) ? 5'd6  :
-          (track_pos >= 13'd2200) ? 5'd5  :
-          (track_pos >= 13'd1760) ? 5'd4  :
-          (track_pos >= 13'd1320) ? 5'd3  :
-          (track_pos >= 13'd880)  ? 5'd2  :
-          (track_pos >= 13'd440)  ? 5'd1  : 5'd0;
+          (track_pos >= 15*SECT_LEN) ? 5'd15 :
+          (track_pos >= 14*SECT_LEN) ? 5'd14 :
+          (track_pos >= 13*SECT_LEN) ? 5'd13 :
+          (track_pos >= 12*SECT_LEN) ? 5'd12 :
+          (track_pos >= 11*SECT_LEN) ? 5'd11 :
+          (track_pos >= 10*SECT_LEN) ? 5'd10 :
+          (track_pos >= 9*SECT_LEN) ? 5'd9 :
+          (track_pos >= 8*SECT_LEN) ? 5'd8 :
+          (track_pos >= 7*SECT_LEN) ? 5'd7 :
+          (track_pos >= 6*SECT_LEN) ? 5'd6 :
+          (track_pos >= 5*SECT_LEN) ? 5'd5 :
+          (track_pos >= 4*SECT_LEN) ? 5'd4 :
+          (track_pos >= 3*SECT_LEN) ? 5'd3 :
+          (track_pos >= 2*SECT_LEN) ? 5'd2 :
+          (track_pos >= 1*SECT_LEN) ? 5'd1 :
+          5'd0;
 
     wire [12:0] play_off =
-          (track_pos >= 13'd6600) ? track_pos - 13'd6600 :
-          (track_pos >= 13'd6160) ? track_pos - 13'd6160 :
-          (track_pos >= 13'd5720) ? track_pos - 13'd5720 :
-          (track_pos >= 13'd5280) ? track_pos - 13'd5280 :
-          (track_pos >= 13'd4840) ? track_pos - 13'd4840 :
-          (track_pos >= 13'd4400) ? track_pos - 13'd4400 :
-          (track_pos >= 13'd3960) ? track_pos - 13'd3960 :
-          (track_pos >= 13'd3520) ? track_pos - 13'd3520 :
-          (track_pos >= 13'd3080) ? track_pos - 13'd3080 :
-          (track_pos >= 13'd2640) ? track_pos - 13'd2640 :
-          (track_pos >= 13'd2200) ? track_pos - 13'd2200 :
-          (track_pos >= 13'd1760) ? track_pos - 13'd1760 :
-          (track_pos >= 13'd1320) ? track_pos - 13'd1320 :
-          (track_pos >= 13'd880)  ? track_pos - 13'd880  :
-          (track_pos >= 13'd440)  ? track_pos - 13'd440  : track_pos;
+          (track_pos >= 15*SECT_LEN) ? track_pos - 15*SECT_LEN :
+          (track_pos >= 14*SECT_LEN) ? track_pos - 14*SECT_LEN :
+          (track_pos >= 13*SECT_LEN) ? track_pos - 13*SECT_LEN :
+          (track_pos >= 12*SECT_LEN) ? track_pos - 12*SECT_LEN :
+          (track_pos >= 11*SECT_LEN) ? track_pos - 11*SECT_LEN :
+          (track_pos >= 10*SECT_LEN) ? track_pos - 10*SECT_LEN :
+          (track_pos >= 9*SECT_LEN) ? track_pos - 9*SECT_LEN :
+          (track_pos >= 8*SECT_LEN) ? track_pos - 8*SECT_LEN :
+          (track_pos >= 7*SECT_LEN) ? track_pos - 7*SECT_LEN :
+          (track_pos >= 6*SECT_LEN) ? track_pos - 6*SECT_LEN :
+          (track_pos >= 5*SECT_LEN) ? track_pos - 5*SECT_LEN :
+          (track_pos >= 4*SECT_LEN) ? track_pos - 4*SECT_LEN :
+          (track_pos >= 3*SECT_LEN) ? track_pos - 3*SECT_LEN :
+          (track_pos >= 2*SECT_LEN) ? track_pos - 2*SECT_LEN :
+          (track_pos >= 1*SECT_LEN) ? track_pos - 1*SECT_LEN :
+          track_pos;
 
     assign dbg_playsel = play_sec;
     assign dbg_playoff = play_off;
@@ -340,11 +306,10 @@ module disk2_card (
     wire in_dmrk  = (play_off >= OFF_DMRK)  && (play_off <  OFF_DATA);
     wire in_data  = (play_off >= OFF_DATA)  && (play_off <  OFF_DTAIL);
     wire in_dtail = (play_off >= OFF_DTAIL) && (play_off <  OFF_DTAIL + 3);
-    wire in_gap3  = (play_off >= OFF_DTAIL + 3);
 
     // The header checksum: volume XOR track XOR sector, the four bytes RWTS
-    // compares.  DOS 3.3 volumes are $FE.
-    wire [7:0] hdr_cksum = 8'hFE ^ {2'b00, dbg_track[5:0]} ^ {4'b0000, play_sec};
+    // compares.
+    wire [7:0] hdr_cksum = VOLUME ^ {2'b00, trk} ^ {4'b0000, play_sec};
 
     // ------------------------------------------------------------------
     // Six-and-two encoding
@@ -392,7 +357,7 @@ module disk2_card (
     // different value, and after a seek back the head arrives at an offset it
     // had a value for two tracks ago.
     wire grp_ok = (grp_have == data_off) && (grp_hsec == play_sec[3:0]) &&
-                  (grp_htrk == dbg_track)     && (grp_hdrv == dbg_drive);
+                  (grp_htrk == trk)          && (grp_hdrv == drive_q);
 
     // What the card wants is what the head is on, and nothing else.  Fetching the
     // position after that as well, so a request is in hand all the way through a
@@ -417,8 +382,8 @@ module disk2_card (
             grp_have <= grp_want;     // the answer is grp_val, for grp_want
             grp_q    <= grp_val;
             grp_hsec <= play_sec[3:0];
-            grp_htrk <= dbg_track;
-            grp_hdrv <= dbg_drive;
+            grp_htrk <= trk;
+            grp_hdrv <= drive_q;
         end else if (!grp_busy && in_data && !grp_ok) begin
             grp_busy <= 1'b1;
             grp_want <= grp_ask;
@@ -435,8 +400,8 @@ module disk2_card (
     // the third the sector and the fourth the checksum.
     wire [12:0] hcrc_i   = play_off - OFF_HCRC;
     wire [1:0]  hdr_pair = hcrc_i[2:1];
-    wire [7:0]  hdr_byte = (hdr_pair == 2'd0) ? 8'hFE :
-                           (hdr_pair == 2'd1) ? {2'b00, dbg_track[5:0]} :
+    wire [7:0]  hdr_byte = (hdr_pair == 2'd0) ? VOLUME :
+                           (hdr_pair == 2'd1) ? {2'b00, trk} :
                            (hdr_pair == 2'd2) ? {4'b0000, play_sec} :
                                                 hdr_cksum;
     wire [7:0]  v_hdr    = hcrc_i[0] ? a44_lo(hdr_byte) : a44_hi(hdr_byte);
@@ -473,7 +438,6 @@ module disk2_card (
     // ------------------------------------------------------------------
     // The data register, the shift register, and the write path
     // ------------------------------------------------------------------
-    wire q6_rd  = q6_sel  && !cpu_we;
     wire q6l_rd = q6l_sel && !cpu_we;
     wire q7_rd  = q7_sel  && !cpu_we;
     wire q7l_rd = q7l_sel && !cpu_we;
@@ -490,7 +454,6 @@ module disk2_card (
             started   <= 1'b0;
             shift_cnt <= 6'd0;
             wr_mode_q <= 1'b0;
-            shreg     <= 8'hFF;
             wr_latch  <= 8'h00;
             rdy_q     <= 1'b0;
         end else begin
@@ -504,9 +467,7 @@ module disk2_card (
                     shift_cnt <= 6'd0;
                     rdy_q     <= 1'b1;          // a new byte is under the head
                     started   <= 1'b1;
-                    if (!started)                       track_pos <= track_pos;
-                    else if (track_pos >= TRACK_LEN - 1) track_pos <= 13'd0;
-                    else                                track_pos <= track_pos + 1'b1;
+                    if (started) track_pos <= track_nx;
                 end else begin
                     shift_cnt <= shift_cnt + 1'b1;
                 end
@@ -522,11 +483,7 @@ module disk2_card (
 
             if (wr_mode_q) begin
                 // Write mode: Q7L shifts the latched byte into the stream.
-                if (q7l_rd) begin
-                    shreg <= wr_latch;
-                    if (track_pos >= TRACK_LEN - 1) track_pos <= 13'd0;
-                    else                                    track_pos <= track_pos + 1'b1;
-                end
+                if (q7l_rd) track_pos <= track_nx;
             end
         end
     end
@@ -540,9 +497,6 @@ module disk2_card (
     assign store_wr_byte  = wr_latch;
     assign store_wr_data  = in_data;
     assign store_wr_off   = data_off;
-    assign store_wr_sec   = play_sec[3:0];
-    assign store_wr_track = dbg_track;
-    assign store_wr_drive = drive_q;
 
     // The data register.  In read mode it is the shift register; in write mode
     // a read of it is the write-protect sense, so the motor's drive with no
@@ -560,9 +514,9 @@ module disk2_card (
     // ------------------------------------------------------------------
     assign grp_req   = grp_busy;
     assign grp_off   = grp_want;
-    assign grp_sec   = play_sec[3:0];
-    assign grp_track = dbg_track;
-    assign grp_drive = drive_q;
+    assign pos_sec   = play_sec[3:0];
+    assign pos_track = {3'd0, trk};
+    assign pos_drive = drive_q;
     assign dbg_any_disk  = store_drv_present[0] || store_drv_present[1];
     // "The card does not have the value for where the head is".  A real drive
     // streams a byte every 32 us and is never caught out, but the bench walks

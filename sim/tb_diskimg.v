@@ -159,10 +159,9 @@ module tb_diskimg;
 
     disk2_store u_store (
         .clk(clk), .reset(reset),
-        .grp_req(1'b0), .grp_off(9'd0), .grp_sec(4'd0), .grp_track(9'd0),
-        .grp_drive(1'b0), .grp_val(), .grp_ack(unused_grp_ack),
+        .grp_req(1'b0), .grp_off(9'd0), .pos_sec(4'd0), .pos_track(9'd0),
+        .pos_drive(1'b0), .grp_val(), .grp_ack(unused_grp_ack),
         .wr_seen(1'b0), .wr_byte(8'h00), .wr_in_data(1'b0), .wr_off(9'd0),
-        .wr_sec(4'd0), .wr_track(9'd0), .wr_drive(1'b0),
         .drv_present(drv_present), .drv_writable(drv_writable),
         // The debugger and the bench share the upload port.  The debugger's
         // outputs are all zero while it is idle, which is whenever the bench is
@@ -177,7 +176,6 @@ module tb_diskimg;
         .down_go(img_dn_go), .down_drive(img_dn_drive), .down_addr(img_dn_addr),
         .down_last(img_dn_last), .down_data(img_dn_data),
         .down_valid(img_dn_valid), .down_done(img_dn_done),
-        .dbg_present(), .dbg_track(),
         .dsk_go(dsk_go), .dsk_addr(dsk_addr), .dsk_we(dsk_we), .dsk_wdata(dsk_wdata),
         .dsk_rdata(dsk_rdata), .dsk_ack(dsk_ack), .dsk_idle(dsk_idle)
     );
