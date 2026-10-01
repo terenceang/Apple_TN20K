@@ -31,6 +31,16 @@ IO_PORT "uart_rx" IO_TYPE=LVCMOS33 PULL_MODE=UP BANK_VCCIO=3.3;
 IO_LOC "uart_tx" 69;
 IO_PORT "uart_tx" IO_TYPE=LVCMOS33 DRIVE=8 BANK_VCCIO=3.3;
 
+// SPI link to the ESP32 companion (J5/J6 plain GPIO; avoid 25/26/52/53, HDMI CEC/HPD/DDC)
+IO_LOC "spi_sck" 71;
+IO_PORT "spi_sck" IO_TYPE=LVCMOS33 DRIVE=8 BANK_VCCIO=3.3;
+IO_LOC "spi_mosi" 72;
+IO_PORT "spi_mosi" IO_TYPE=LVCMOS33 DRIVE=8 BANK_VCCIO=3.3;
+IO_LOC "spi_miso" 73;
+IO_PORT "spi_miso" IO_TYPE=LVCMOS33 PULL_MODE=DOWN BANK_VCCIO=3.3;
+IO_LOC "spi_cs_n" 74;
+IO_PORT "spi_cs_n" IO_TYPE=LVCMOS33 DRIVE=8 PULL_MODE=UP BANK_VCCIO=3.3;
+
 // HDMI TMDS Differential Output (True LVDS, TLVDS_OBUF), AC coupled on the
 // board. Each leg gets its own single-pin IO_LOC: nextpnr leaves the _n leg
 // unconstrained with the "p,n" pair form, and "p,n" plus an _n IO_LOC

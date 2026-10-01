@@ -105,7 +105,9 @@ Run-Tb 'tb_cpu_trace'    $core -Gen '2012' -Defines $disk2Defines
 Run-Tb 'tb_auxsw'        $core -Gen '2012' -Defines $disk2Defines
 Run-Tb 'tb_p6boot'       $core -Gen '2012' -Defines $disk2Defines
 
-Run-Tb 'tb_aux_ram'      @('sim/models/sdram_model.v', 'src/aux_ram.v', 'src/sdram/sdram.v') -Gen '2012'
+Run-Tb 'tb_spi_master'   @('src/spi_master.v') -Gen '2012'
+Run-Tb 'tb_spi_ctl'      (@('src/spi_ctl.v', 'src/spi_master.v', 'src/disk2/disk2_trk.v')) -Gen '2012' -Defines $disk2Defines
+Run-Tb 'tb_aux_ram'     @('sim/models/sdram_model.v', 'src/aux_ram.v', 'src/sdram/sdram.v') -Gen '2012'
 
 $allSources = & (Join-Path $root 'scripts\sources.ps1')
 Run-Tb 'tb_top'          (@('sim/models/gowin_prims.v', 'sim/models/sdram_model.v') + $allSources) -Gen '2012' -Defines $disk2Defines

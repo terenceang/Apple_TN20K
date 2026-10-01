@@ -1,7 +1,9 @@
 // Apple //e Core Logic for Tang Nano 20K
 // Integrates 65C02 CPU, 64KB RAM, 16KB System ROM, 4KB Character ROM, and Softswitches
 
-module apple2_core (
+module apple2_core #(
+    parameter DSK_TRK = 0   // 1: Disk II from ESP32-served nibble tracks (see the g_trk block)
+) (
     input  wire        clk,           // 27.0 MHz
     input  wire        reset,         // Active-high reset
     input  wire        ce_1m,         // 1.023 MHz clock enable
@@ -56,6 +58,12 @@ module apple2_core (
     input  wire [15:0] dsk_store_rdata,
     input  wire        dsk_store_ack,
     input  wire        dsk_store_idle,
+
+    // SPI link to the ESP32 companion (DSK_TRK = 1; idle otherwise)
+    output wire        spi_sck,
+    output wire        spi_mosi,
+    input  wire        spi_miso,
+    output wire        spi_cs_n,
 
     // Diagnostic status & Debugger Interface
     input  wire        cpu_rdy,
@@ -538,6 +546,11 @@ module apple2_core (
     wire [7:0]  d2_dbg_head;
     assign debug_dsk_head = d2_dbg_head;
 
+    // DSK_TRK = 0: the sector card + store above (byte-level uploads over the
+    // debugger).  DSK_TRK = 1: nibble tracks loaded from the ESP32 over SPI
+    // (src/spi_ctl.v, src/disk2/disk2_trk.v); the debugger's d/e transfer then
+    // has nothing to talk to.
+    generate if (DSK_TRK == 0) begin : g_sector
     disk2_card u_disk2 (
         .clk(clk),
         .reset(reset),
@@ -613,5 +626,49 @@ module apple2_core (
         .dsk_ack(dsk_store_ack),
         .dsk_idle(dsk_store_idle)
     );
+    assign spi_sck  = 1'b0;
+    assign spi_mosi = 1'b0;
+    assign spi_cs_n = 1'b1;
+    end else begin : g_trk
+    wire        t_head_drv, t_motor, t_wr_evt, t_wr_drv, t_link_up;
+    wire [5:0]  t_head_trk, t_wr_trk;
+    wire [1:0]  t_present, t_writable;
+    wire        t_x_req, t_x_we, t_x_ack;
+    wire [18:0] t_x_addr;
+    wire [15:0] t_x_wdata, t_x_rdata;
+
+    spi_ctl u_spi (
+        .clk(clk), .reset(reset),
+        .spi_sck(spi_sck), .spi_mosi(spi_mosi), .spi_miso(spi_miso), .spi_cs_n(spi_cs_n),
+        .head_drv(t_head_drv), .head_trk(t_head_trk), .motor(t_motor),
+        .wr_evt(t_wr_evt), .wr_drv(t_wr_drv), .wr_trk(t_wr_trk),
+        .drv_present(t_present), .drv_writable(t_writable),
+        .x_req(t_x_req), .x_we(t_x_we), .x_addr(t_x_addr), .x_wdata(t_x_wdata),
+        .x_rdata(t_x_rdata), .x_ack(t_x_ack), .link_up(t_link_up)
+    );
+
+    disk2_trk u_disk2 (
+        .clk(clk), .reset(reset), .ce_1m(ce_1m),
+        .devsel_n(devsel_n[5]), .iosel_n(iosel_n[5]),
+        .bus_cycle(cpu_go), .cpu_we(cpu_we), .addr(effective_cpu_addr), .cpu_di(cpu_dout),
+        .rom_data(d2_rom_data), .io_data(d2_io_data),
+        .drv_present(t_present), .drv_writable(t_writable),
+        .head_drv(t_head_drv), .head_trk(t_head_trk), .motor(t_motor),
+        .wr_evt(t_wr_evt), .wr_drv(t_wr_drv), .wr_trk(t_wr_trk),
+        .x_req(t_x_req), .x_we(t_x_we), .x_addr(t_x_addr), .x_wdata(t_x_wdata),
+        .x_rdata(t_x_rdata), .x_ack(t_x_ack),
+        .dsk_go(dsk_store_go), .dsk_addr(dsk_store_addr), .dsk_we(dsk_store_we),
+        .dsk_wdata(dsk_store_wdata), .dsk_rdata(dsk_store_rdata),
+        .dsk_ack(dsk_store_ack), .dsk_idle(dsk_store_idle),
+        .dbg_track(d2_dbg_track), .dbg_head(d2_dbg_head), .dbg_motor(d2_motor),
+        .dbg_drive(d2_drive), .dbg_any_disk(d2_any_disk), .dbg_wr_mode(d2_wr_mode)
+    );
+    // The debugger's image transfer has no store to reach in this mode.
+    assign img_up_busy  = 1'b0;
+    assign img_up_done  = 1'b0;
+    assign img_dn_data  = 8'd0;
+    assign img_dn_valid = 1'b0;
+    assign img_dn_done  = 1'b0;
+    end endgenerate
 
 endmodule

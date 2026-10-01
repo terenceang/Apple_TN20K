@@ -8,6 +8,7 @@ interface Props {
   status: Status | null
   onCommand: (ch: string) => void
   onClearMem: () => void
+  onColdBoot: () => void
   onToggle: () => void
   onClose?: () => void
 }
@@ -24,6 +25,7 @@ export function DebuggerPane({
   status,
   onCommand,
   onClearMem,
+  onColdBoot,
   onToggle,
   onClose,
 }: Props) {
@@ -104,6 +106,9 @@ export function DebuggerPane({
             </button>
             <button onClick={() => onCommand(CMD.reset)} disabled={mode !== 'debugger'}>
               CPU reset <kbd>x</kbd>
+            </button>
+            <button onClick={onColdBoot} title="Ctrl+Open-Apple+RESET: reboot from slot 6">
+              Cold boot
             </button>
             <button onClick={() => onCommand(CMD.help)} disabled={mode !== 'debugger'}>
               Help <kbd>?</kbd>

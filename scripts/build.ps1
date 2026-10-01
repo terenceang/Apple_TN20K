@@ -75,14 +75,17 @@ if ($wantSynth) {
     # own ROM at $C600 boots a Disk II without it; the card's copy only answers
     # when the ROM selects the card's $C600 instead.  DSK2_NO_P6_ROM therefore
     # leaves the card's $C600 as zeros.
-    if (-not (Test-Path -LiteralPath (Join-Path $root 'roms\disk2_p6.hex'))) {
-        $lines += "read_verilog -noblackbox -DDSK2_NO_P6_ROM src/disk2/disk2_card.v"
+    $p6cards = @('src/disk2/disk2_card.v', 'src/disk2/disk2_trk.v')   # both carry the $C600 ROM
+    $noP6 = -not (Test-Path -LiteralPath (Join-Path $root 'roms\disk2_p6.hex'))
+    if ($noP6) {
         Write-Host "== no roms\disk2_p6.hex: the card's `$C600 stays zero (INTCXROM boots DOS anyway)"
-    } else {
-        $lines += "read_verilog -noblackbox src/disk2/disk2_card.v"
+    }
+    foreach ($card in $p6cards) {
+        if ($noP6) { $lines += "read_verilog -noblackbox -DDSK2_NO_P6_ROM $card" }
+        else       { $lines += "read_verilog -noblackbox $card" }
     }
     foreach ($src in $sources) {
-        if ($src -eq 'src/disk2/disk2_card.v') { continue }   # read above
+        if ($p6cards -contains $src) { continue }   # read above
         # src/sdram/ is vendored SystemVerilog; everything else is plain Verilog
         if ($src -match '^src/sdram/') {
             $lines += "read_verilog -noblackbox -sv $src"

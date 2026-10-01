@@ -15,6 +15,12 @@ module top (
     input  wire       uart_rx,    // Pin 70
     output wire       uart_tx,    // Pin 69
 
+    // SPI link to the ESP32 companion (J5/J6, see src/spi_ctl.v)
+    output wire       spi_sck,    // Pin 71
+    output wire       spi_mosi,   // Pin 72
+    input  wire       spi_miso,   // Pin 73
+    output wire       spi_cs_n,   // Pin 74
+
     // HDMI TMDS Output (Pins 33-40)
     output wire       tmds_clk_p,
     output wire       tmds_clk_n,
@@ -242,7 +248,12 @@ module top (
         .O_sdram_dqm(O_sdram_dqm)
     );
 
-    apple2_core u_core (
+    // 1 = Disk II images come from the ESP32 over SPI (nibble tracks, src/spi_ctl.v);
+    // 0 = the sector card fed by the debugger's d/e upload.
+    localparam DSK_TRK = 1'b0;
+
+    apple2_core #(.DSK_TRK(DSK_TRK)) u_core (
+        .spi_sck(spi_sck), .spi_mosi(spi_mosi), .spi_miso(spi_miso), .spi_cs_n(spi_cs_n),
         .clk(clk_pixel),
         .reset(sys_reset | cpu_reset_req | kbd_reset),
         .ce_1m(ce_1m),

@@ -179,6 +179,7 @@ export default function App() {
               status={apple.status}
               onCommand={onCommand}
               onClearMem={apple.clearMem}
+              onColdBoot={apple.coldBoot}
               onToggle={apple.toggleDebugger}
               onClose={() => setShowDebugger(false)}
             />

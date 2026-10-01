@@ -363,6 +363,19 @@ export function useApple() {
     [mode, send],
   )
 
+  /** Ctrl+Open-Apple+RESET: the //e's cold start. The firmware drops keys while
+   *  the debugger has the CPU, so leave it first (the toggle needs ~1 s to settle). */
+  const coldBoot = useCallback(() => {
+    const OPEN_APPLE = 1
+    let t = 0
+    if (mode === 'debugger') {
+      send([CTRL_B])
+      t = 1000
+    }
+    setTimeout(() => send(encodeReset(true, OPEN_APPLE)), t)
+    setTimeout(() => send(encodeReset(false, OPEN_APPLE)), t + 300)
+  }, [mode, send])
+
   /** All character keys are up: drops the //e's any-key-down line ($C010 bit 7). */
   const releaseKeys = useCallback(() => {
     if (mode === 'debugger') return
@@ -620,6 +633,7 @@ export function useApple() {
       clearDiskError,
       pressKey,
       resetKey,
+      coldBoot,
       releaseKeys,
       toggleDebugger,
       captureScreen,
@@ -651,6 +665,7 @@ export function useApple() {
       clearDiskError,
       pressKey,
       resetKey,
+      coldBoot,
       releaseKeys,
       toggleDebugger,
       captureScreen,
