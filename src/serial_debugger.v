@@ -19,6 +19,7 @@
 //   e1 e2  download a Disk ][ image: 143,360 bytes of drive 1 or 2 come back,
 //      then a prompt
 //   i  print the Disk ][ image checksums: "I1:xxxxxxxx I2:xxxxxxxx", 0 = empty
+//   k j  set the dump address to $E000 / $D000
 //   0 1 4 8 f v  set the memory dump address ($0000 $0100 $0400 $0800
 //      $FA60 $FFF0) before m
 // 2. Hardware Debugger Mode (Toggle with Ctrl+B / ASCII 0x02):
@@ -93,22 +94,6 @@ module serial_debugger (
     input  wire        img_dn_valid,  // img_dn_data is good
     input  wire        img_dn_done,   // img_dn_last and it has been served
 
-    // ProDOS Hard Disk image transfer (2 MB per drive)
-    output reg         hd_up_go,
-    output wire        hd_up_drive,
-    output wire [20:0] hd_up_addr,
-    output reg  [7:0]  hd_up_data,
-    output wire        hd_up_last,
-    output reg         hd_up_bad,
-    input  wire        hd_up_busy,
-    input  wire        hd_up_done,
-    output reg         hd_dn_go,
-    output wire        hd_dn_drive,
-    output wire [20:0] hd_dn_addr,
-    output wire        hd_dn_last,
-    input  wire [7:0]  hd_dn_data,
-    input  wire        hd_dn_valid,
-    input  wire        hd_dn_done,
 
     // Softswitch state, for the W (screen dump) command
     input  wire        text_mode,
@@ -257,11 +242,7 @@ module serial_debugger (
     localparam STR_DONE_LEN     = 8'd8;
     localparam STR_LOST_START   = 9'd244;
     localparam STR_LOST_LEN     = 8'd8;
-    localparam STR_HD_UP_START  = 9'd252;
-    localparam STR_HD_UP_LEN    = 8'd34;
-    localparam STR_HD_DN_START  = 9'd286;
-    localparam STR_HD_DN_LEN    = 8'd26;
-    reg [7:0] str_rom [0:311];
+    reg [7:0] str_rom [0:251];
     initial begin
         str_rom[0] = 8'h0D; str_rom[1] = 8'h0A; str_rom[2] = 8'h5B; str_rom[3] = 8'h20;
         str_rom[4] = 8'h41; str_rom[5] = 8'h70; str_rom[6] = 8'h70; str_rom[7] = 8'h6C;
@@ -339,25 +320,6 @@ module serial_debugger (
         // 244: "\r\nlost\r\n"
         str_rom[244] = 8'h0D; str_rom[245] = 8'h0A; str_rom[246] = 8'h6C; str_rom[247] = 8'h6F;
         str_rom[248] = 8'h73; str_rom[249] = 8'h74; str_rom[250] = 8'h0D; str_rom[251] = 8'h0A;
-        // ProDOS Hard Disk image transfer (2 MB):
-        // 252: "\r\nUPLOAD 2097152 bytes, send now\r\n"
-        str_rom[252] = 8'h0D; str_rom[253] = 8'h0A; str_rom[254] = 8'h55; str_rom[255] = 8'h50;
-        str_rom[256] = 8'h4C; str_rom[257] = 8'h4F; str_rom[258] = 8'h41; str_rom[259] = 8'h44;
-        str_rom[260] = 8'h20; str_rom[261] = 8'h32; str_rom[262] = 8'h30; str_rom[263] = 8'h39;
-        str_rom[264] = 8'h37; str_rom[265] = 8'h31; str_rom[266] = 8'h35; str_rom[267] = 8'h32;
-        str_rom[268] = 8'h20; str_rom[269] = 8'h62; str_rom[270] = 8'h79; str_rom[271] = 8'h74;
-        str_rom[272] = 8'h65; str_rom[273] = 8'h73; str_rom[274] = 8'h2C; str_rom[275] = 8'h20;
-        str_rom[276] = 8'h73; str_rom[277] = 8'h65; str_rom[278] = 8'h6E; str_rom[279] = 8'h64;
-        str_rom[280] = 8'h20; str_rom[281] = 8'h6E; str_rom[282] = 8'h6F; str_rom[283] = 8'h77;
-        str_rom[284] = 8'h0D; str_rom[285] = 8'h0A;
-        // 286: "\r\nDOWNLOAD 2097152 bytes\r\n"
-        str_rom[286] = 8'h0D; str_rom[287] = 8'h0A; str_rom[288] = 8'h44; str_rom[289] = 8'h4F;
-        str_rom[290] = 8'h57; str_rom[291] = 8'h4E; str_rom[292] = 8'h4C; str_rom[293] = 8'h4F;
-        str_rom[294] = 8'h41; str_rom[295] = 8'h44; str_rom[296] = 8'h20; str_rom[297] = 8'h32;
-        str_rom[298] = 8'h30; str_rom[299] = 8'h39; str_rom[300] = 8'h37; str_rom[301] = 8'h31;
-        str_rom[302] = 8'h35; str_rom[303] = 8'h32; str_rom[304] = 8'h20; str_rom[305] = 8'h62;
-        str_rom[306] = 8'h79; str_rom[307] = 8'h74; str_rom[308] = 8'h65; str_rom[309] = 8'h73;
-        str_rom[310] = 8'h0D; str_rom[311] = 8'h0A;
     end
 
     // String printer sub-engine
@@ -380,7 +342,8 @@ module serial_debugger (
     // The six memory-dump preset keys ("0" "1" "4" "8" "f"/"F" "v"/"V")
     wire mem_preset = (rx_byte == "0") || (rx_byte == "1") || (rx_byte == "4") ||
                       (rx_byte == "8") || (rx_byte == "f") || (rx_byte == "F") ||
-                      (rx_byte == "v") || (rx_byte == "V");
+                      (rx_byte == "v") || (rx_byte == "V") ||
+                      (rx_byte == "k") || (rx_byte == "j");
 
     // =========================================================================
     // 5. Hardware Debugger State Machine & Micro-Sequencer
@@ -392,22 +355,18 @@ module serial_debugger (
     localparam M_MEM     = 4'd4;
     localparam M_STATUS  = 4'd5;
     localparam M_SCREEN  = 4'd6;
-    localparam M_IMG     = 4'd7;   // a Disk ][ or ProDOS HD image, in or out
+    localparam M_IMG     = 4'd7;   // a Disk ][ image, in or out
     localparam M_INFO    = 4'd8;   // the Disk ][ checksums (the i command)
+    localparam M_HIST    = 4'd9;   // the last 32 instruction addresses before a BRK (p)
 
     // Disk ][ image: 143,360 bytes (35 tracks x 16 sectors x 256 bytes)
     localparam [17:0] IMG_BYTES = 18'd143360;
     localparam [17:0] IMG_LAST  = IMG_BYTES - 18'd1;
 
-    // ProDOS Hard Disk image: 2,097,152 bytes (4,096 blocks x 512 bytes)
-    localparam [21:0] IMG_HD_BYTES = 22'd2097152;
-    localparam [20:0] IMG_HD_LAST  = 21'd2097151;
-
     // Which way the bytes are going, and the position in the image.  img_dir is
     // 0 for the host writing the drive and 1 for the host reading it.
     reg        img_dir   = 1'b0;
     reg        img_drv   = 1'b0;
-    reg        img_is_hd = 1'b0;
     reg [20:0] img_addr  = 21'd0;
 
     assign img_up_drive = img_drv;
@@ -417,20 +376,13 @@ module serial_debugger (
     assign img_dn_addr  = img_addr[17:0];
     assign img_dn_last  = (img_addr == {3'd0, IMG_LAST});
 
-    assign hd_up_drive  = img_drv;
-    assign hd_up_addr   = img_addr;
-    assign hd_up_last   = (img_addr == IMG_HD_LAST);
-    assign hd_dn_drive  = img_drv;
-    assign hd_dn_addr   = img_addr;
-    assign hd_dn_last   = (img_addr == IMG_HD_LAST);
-
-    wire        active_up_busy  = img_is_hd ? hd_up_busy  : img_up_busy;
-    wire        active_up_done  = img_is_hd ? hd_up_done  : img_up_done;
-    wire        active_up_last  = img_is_hd ? hd_up_last  : img_up_last;
-    wire        active_dn_valid = img_is_hd ? hd_dn_valid : img_dn_valid;
-    wire        active_dn_last  = img_is_hd ? hd_dn_last  : img_dn_last;
-    wire [7:0]  active_dn_data  = img_is_hd ? hd_dn_data  : img_dn_data;
-    wire [21:0] img_target_bytes = img_is_hd ? {1'b0, IMG_HD_BYTES} : {4'd0, IMG_BYTES};
+    wire        active_up_busy  = img_up_busy;
+    wire        active_up_done  = img_up_done;
+    wire        active_up_last  = img_up_last;
+    wire        active_dn_valid = img_dn_valid;
+    wire        active_dn_last  = img_dn_last;
+    wire [7:0]  active_dn_data  = img_dn_data;
+    wire [21:0] img_target_bytes = {4'd0, IMG_BYTES};
 
     // The byte that has arrived from the host and the flag that says so, and the
     // flag that says it has been handed to the store.
@@ -485,6 +437,15 @@ module serial_debugger (
     reg [7:0]  latched_ir;
 
     reg [15:0] dump_addr = 16'hFA60;
+    // PC history: the last 32 opcode fetches, frozen when the BRK/IRQ vector
+    // ($C3FA) is entered so p shows what led to it.
+    reg [15:0] ph [0:31];
+    reg [4:0]  ph_i   = 5'd0;
+    reg        ph_frz = 1'b0;
+    reg [5:0]  ph_n   = 6'd0;
+    reg [2:0]  adr_n     = 3'd0;         // hex digits still owed after '@'
+    wire       rx_hex    = (rx_byte >= "0" && rx_byte <= "9") || (rx_byte >= "a" && rx_byte <= "f");
+    wire [3:0] rx_nib    = rx_byte[6] ? rx_byte[3:0] + 4'd9 : rx_byte[3:0];
     reg [7:0]  mem_row [0:15];
     reg [3:0]  mem_col = 4'd0;
     reg [2:0]  mem_wait = 3'd0;
@@ -573,7 +534,6 @@ module serial_debugger (
             scr_flags      <= 8'h00;
             img_dir        <= 1'b0;
             img_drv        <= 1'b0;
-            img_is_hd      <= 1'b0;
             img_addr       <= 21'd0;
             img_byte       <= 8'h00;
             img_have       <= 1'b0;
@@ -585,10 +545,6 @@ module serial_debugger (
             img_up_go      <= 1'b0;
             img_up_bad     <= 1'b0;
             img_dn_go      <= 1'b0;
-            hd_up_data     <= 8'h00;
-            hd_up_go       <= 1'b0;
-            hd_up_bad      <= 1'b0;
-            hd_dn_go       <= 1'b0;
             img_rx         <= 22'd0;
             dsk_sum0       <= 32'd0;
             dsk_sum1       <= 32'd0;
@@ -599,9 +555,12 @@ module serial_debugger (
             img_up_go  <= 1'b0;
             img_up_bad <= 1'b0;
             img_dn_go  <= 1'b0;
-            hd_up_go   <= 1'b0;
-            hd_up_bad  <= 1'b0;
-            hd_dn_go   <= 1'b0;
+
+            if (ce_1m && cpu_sync && !ph_frz) begin
+                ph[ph_i] <= cpu_pc;
+                ph_i     <= ph_i + 1'b1;
+                if (cpu_pc == 16'hC700) ph_frz <= 1'b1;
+            end
 
             // Debugger CPU Reset Sequencer
             if (reset_timer != 8'd0) begin
@@ -692,7 +651,20 @@ module serial_debugger (
                     fifo_push(rx_byte);
                 end
             end else if (dbg_mode && (main_state == M_IDLE) && rx_valid) begin
-                case (rx_byte)
+                if (adr_n != 3'd0) begin
+                    // "@" and four hex digits set the dump address
+                    if (rx_hex) begin
+                        dump_addr <= {dump_addr[11:0], rx_nib};
+                        adr_n     <= adr_n - 1'b1;
+                    end else
+                        adr_n <= 3'd0;
+                end else case (rx_byte)
+                    "@": adr_n <= 3'd4;
+                    "p": begin
+                        ph_n       <= 6'd0;
+                        seq_step   <= 5'd0;
+                        main_state <= M_HIST;
+                    end
                     "r", "R": begin
                         latch_regs;
                         main_state <= M_REGS;
@@ -721,17 +693,9 @@ module serial_debugger (
                     end
 
                     // d1/d2 upload Disk ][, e1/e2 download Disk ][.
-                    // p1/p2 upload ProDOS HD, o1/o2 download ProDOS HD.
                     "d", "D", "e", "E": begin
                         img_cmd   <= 1'b1;
-                        img_is_hd <= 1'b0;
                         img_dir   <= (rx_byte == "e") || (rx_byte == "E");
-                    end
-
-                    "p", "P", "o", "O": begin
-                        img_cmd   <= 1'b1;
-                        img_is_hd <= 1'b1;
-                        img_dir   <= (rx_byte == "o") || (rx_byte == "O");
                     end
 
                     "1", "2": begin
@@ -740,7 +704,7 @@ module serial_debugger (
                             img_drv    <= (rx_byte == "2");
                             img_addr   <= 21'd0;
                             img_rx     <= 22'd0;
-                            if (!img_is_hd && !img_dir) begin
+                            if (!img_dir) begin
                                 if (rx_byte == "2") dsk_sum1 <= 32'd0;
                                 else                dsk_sum0 <= 32'd0;
                             end
@@ -750,15 +714,8 @@ module serial_debugger (
                             img_ackq   <= 1'b0;
                             img_up_go  <= 1'b0;
                             img_dn_go  <= 1'b0;
-                            hd_up_go   <= 1'b0;
-                            hd_dn_go   <= 1'b0;
-                            if (img_is_hd) begin
-                                str_pos <= img_dir ? STR_HD_DN_START : STR_HD_UP_START;
-                                str_cnt <= img_dir ? STR_HD_DN_LEN   : STR_HD_UP_LEN;
-                            end else begin
-                                str_pos <= img_dir ? STR_DN_START : STR_UP_START;
-                                str_cnt <= img_dir ? STR_DN_LEN   : STR_UP_LEN;
-                            end
+                            str_pos <= img_dir ? STR_DN_START : STR_UP_START;
+                            str_cnt <= img_dir ? STR_DN_LEN   : STR_UP_LEN;
                             return_job <= M_IMG;
                             main_state <= M_STR;
                         end else if (rx_byte == "1") begin
@@ -786,6 +743,8 @@ module serial_debugger (
                     "8":     dump_addr <= 16'h0800;
                     "f", "F": dump_addr <= 16'hFA60;
                     "v", "V": dump_addr <= 16'hFFF0;
+                    "k":     dump_addr <= 16'hE000;
+                    "j":     dump_addr <= 16'hD000;
 
                     "i", "I": begin
                         main_state <= M_INFO;
@@ -821,7 +780,7 @@ module serial_debugger (
 
                 // Any of the six preset addresses above starts a dump; "m"
                 // reuses the last address. Only the address differs.
-                if (mem_preset && !img_cmd) begin
+                if (mem_preset && !img_cmd && adr_n == 3'd0) begin
                     main_state <= M_MEM;
                     seq_step   <= 5'd0;
                     mem_col    <= 4'd0;
@@ -1120,6 +1079,27 @@ module serial_debugger (
                     endcase
                 end
 
+                M_HIST: begin
+                    case (seq_step)
+                        5'd0: begin
+                            hex_val <= ph[ph_i + ph_n[4:0]]; hex_digits <= 3'd4;
+                            return_job <= M_HIST; seq_step <= 5'd1; main_state <= M_HEX;
+                        end
+                        5'd1: if (!tx_fifo_full) begin
+                            fifo_push(ph_n[2:0] == 3'd7 ? 8'h0A : " ");
+                            ph_n     <= ph_n + 1'b1;
+                            seq_step <= (ph_n == 6'd31) ? 5'd2 : 5'd0;
+                        end
+                        default: begin
+                            ph_frz     <= 1'b0;
+                            str_pos    <= STR_PROMPT_START;
+                            str_cnt    <= STR_PROMPT_LEN;
+                            return_job <= M_IDLE;
+                            main_state <= M_STR;
+                        end
+                    endcase
+                end
+
                 // -------------------------------------------------------------
                 // Disk ][ checksums: CRLF, I1:xxxxxxxx I2:xxxxxxxx, a prompt
                 // -------------------------------------------------------------
@@ -1327,11 +1307,8 @@ module serial_debugger (
                                     if (img_rx == {1'b0, img_addr} + 22'd1) begin
                                         str_pos <= STR_DONE_START;
                                     end else begin
-                                        if (img_is_hd) hd_up_bad <= 1'b1;
-                                        else begin
-                                            img_up_bad <= 1'b1;
-                                            if (img_drv) dsk_sum1 <= 32'd0; else dsk_sum0 <= 32'd0;
-                                        end
+                                        img_up_bad <= 1'b1;
+                                        if (img_drv) dsk_sum1 <= 32'd0; else dsk_sum0 <= 32'd0;
                                         str_pos <= STR_LOST_START;
                                     end
                                     str_cnt    <= (img_rx == {1'b0, img_addr} + 22'd1)
@@ -1342,15 +1319,10 @@ module serial_debugger (
                             end
                         end else if (img_have) begin
                             if (!active_up_busy) begin
-                                if (img_is_hd) begin
-                                    hd_up_data <= img_byte;
-                                    hd_up_go   <= 1'b1;
-                                end else begin
-                                    img_up_data <= img_byte;
-                                    img_up_go   <= 1'b1;
-                                    if (img_drv) dsk_sum1 <= dsk_nxt;
-                                    else         dsk_sum0 <= dsk_nxt;
-                                end
+                                img_up_data <= img_byte;
+                                img_up_go   <= 1'b1;
+                                if (img_drv) dsk_sum1 <= dsk_nxt;
+                                else         dsk_sum0 <= dsk_nxt;
                                 img_have    <= 1'b0;
                                 img_sent    <= 1'b1;
                             end
@@ -1363,11 +1335,8 @@ module serial_debugger (
                             end
                         end
                         if ((img_rx >= img_target_bytes) && !img_have && !img_sent && (img_addr != img_target_bytes[20:0])) begin
-                            if (img_is_hd) hd_up_bad <= 1'b1;
-                            else begin
-                                img_up_bad <= 1'b1;
-                                if (img_drv) dsk_sum1 <= 32'd0; else dsk_sum0 <= 32'd0;
-                            end
+                            img_up_bad <= 1'b1;
+                            if (img_drv) dsk_sum1 <= 32'd0; else dsk_sum0 <= 32'd0;
                             str_pos    <= STR_LOST_START;
                             str_cnt    <= STR_LOST_LEN;
                             return_job <= M_IDLE;
@@ -1397,8 +1366,7 @@ module serial_debugger (
                                 end
                             end
                         end else if (!tx_fifo_full) begin
-                            if (img_is_hd) hd_dn_go <= 1'b1;
-                            else           img_dn_go <= 1'b1;
+                            img_dn_go <= 1'b1;
                             img_ask   <= 1'b1;
                         end
                     end

@@ -15,12 +15,6 @@ export const SECTOR_BYTES = 256
 export const TRACK_BYTES = SECTORS_PER_TRACK * SECTOR_BYTES // 4096
 export const DISK_BYTES = TRACKS * TRACK_BYTES // 143360
 
-export const HD_BLOCK_BYTES = 512
-export const HD_BLOCKS = 4096
-export const HD_BYTES = HD_BLOCKS * HD_BLOCK_BYTES // 2097152 (2 MB)
-export const HD_CHUNK_BYTES = 4096 // 8 blocks per ACK chunk
-export const HD_CHUNKS = HD_BYTES / HD_CHUNK_BYTES // 512 chunks
-
 export const ACK_BYTE = 0x06 // ASCII ACK returned by serial_debugger.v after each chunk
 
 /**
@@ -385,106 +379,4 @@ export async function queryDiskSums(link, opts = {}) {
   } finally {
     reader.restore()
   }
-}
-
-/**
- * Validates a ProDOS hard disk image buffer (.po, .hdv, .2mg, .bin, .img).
- * If a 2MG container header ('2IMG') is detected, strips the header and extracts the raw disk payload.
- * If the payload is smaller than 2 MB (2,097,152 bytes), pads it with zeros to exactly 2 MB.
- *
- * @param {ArrayBuffer | Uint8Array} buffer
- * @param {string} [filename]
- * @returns {{ data: Uint8Array, originalSize: number, is2mg: boolean, filename: string }}
- */
-export function validateHardDiskImage(buffer, filename = '') {
-  const raw = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer)
-  let data = raw
-  let is2mg = false
-
-  if (
-    data.length >= 64 &&
-    data[0] === 0x32 && // '2'
-    data[1] === 0x49 && // 'I'
-    data[2] === 0x4d && // 'M'
-    data[3] === 0x47    // 'G'
-  ) {
-    is2mg = true
-    const view = new DataView(data.buffer, data.byteOffset, data.byteLength)
-    const dataOffset = view.getUint32(0x18, true)
-    const dataLen = view.getUint32(0x1c, true)
-    if (dataOffset + dataLen > data.length) {
-      throw new Error(
-        `Corrupted 2MG file: header specifies ${dataLen} bytes at offset ${dataOffset}, but file is only ${data.length} bytes.`,
-      )
-    }
-    data = data.subarray(dataOffset, dataOffset + dataLen)
-  }
-
-  if (data.byteLength === 0) {
-    throw new Error('Hard disk image is empty.')
-  }
-  if (data.byteLength > HD_BYTES) {
-    throw new Error(
-      `Hard disk image exceeds 2 MB limit: expected at most ${HD_BYTES.toLocaleString()} bytes (4,096 blocks), got ${data.byteLength.toLocaleString()} bytes.`,
-    )
-  }
-
-  // Pad to 2 MB if smaller
-  let padded = data
-  if (data.byteLength < HD_BYTES) {
-    padded = new Uint8Array(HD_BYTES)
-    padded.set(data, 0)
-  }
-
-  return {
-    data: padded,
-    originalSize: data.byteLength,
-    is2mg,
-    filename,
-  }
-}
-
-/**
- * Upload a 2,097,152-byte ProDOS hard disk image to Slot 7 Drive 1 or Drive 2 over Web Serial
- * (`p`, then 512 chunks of 4096 bytes, each ACKed).
- *
- * @param {{ write: (b: Uint8Array | number[]) => void, onBytes: (b: Uint8Array) => void }} link
- * @param {1 | 2} drive
- * @param {Uint8Array} hardDiskBytes
- * @param {{
- *   onProgress?: (p: { phase: 'uploading', chunk: number, totalChunks: number, bytesSent: number, totalBytes: number }) => void,
- *   timeoutMs?: number
- * }} [opts]
- * @returns {Promise<void>}
- */
-export async function uploadHardDisk(link, drive, hardDiskBytes, opts = {}) {
-  if (!hardDiskBytes || hardDiskBytes.length !== HD_BYTES) {
-    throw new Error(`Hard disk upload payload must be exactly ${HD_BYTES} bytes, got ${hardDiskBytes?.length}`)
-  }
-  await sendImage(link, 'p', drive, hardDiskBytes, HD_CHUNK_BYTES, opts.timeoutMs ?? 10000, (c) =>
-    opts.onProgress?.({
-      phase: 'uploading',
-      chunk: c,
-      totalChunks: HD_CHUNKS,
-      bytesSent: c * HD_CHUNK_BYTES,
-      totalBytes: HD_BYTES,
-    }),
-  )
-}
-
-/**
- * Download a 2,097,152-byte ProDOS hard disk image from Slot 7 Drive 1 or Drive 2 over Web Serial (`o`).
- *
- * @param {{ write: (b: Uint8Array | number[]) => void, onBytes: (b: Uint8Array) => void }} link
- * @param {1 | 2} drive
- * @param {{
- *   onProgress?: (p: { phase: 'downloading', bytesReceived: number, totalBytes: number }) => void,
- *   timeoutMs?: number
- * }} [opts]
- * @returns {Promise<Uint8Array>} Raw 2,097,152 byte ProDOS hard disk image bytes
- */
-export function downloadHardDisk(link, drive, opts = {}) {
-  return receiveImage(link, 'o', drive, HD_BYTES, opts.timeoutMs ?? 10000, (bytesReceived) =>
-    opts.onProgress?.({ phase: 'downloading', bytesReceived, totalBytes: HD_BYTES }),
-  )
 }

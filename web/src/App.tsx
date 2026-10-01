@@ -142,15 +142,11 @@ export default function App() {
             {showDisks && (
               <DiskPane
                 drives={apple.drives}
-                hardDrives={apple.hardDrives}
                 progress={apple.diskProgress}
                 error={apple.diskError}
                 onUpload={apple.uploadDiskFile}
                 onDownload={apple.downloadDiskFile}
                 onEject={apple.ejectDisk}
-                onUploadHardDisk={apple.uploadHardDiskFile}
-                onDownloadHardDisk={apple.downloadHardDiskFile}
-                onEjectHardDisk={apple.ejectHardDisk}
                 onClearError={apple.clearDiskError}
                 onClose={() => setShowDisks(false)}
                 disabled={apple.conn.state !== 'open'}

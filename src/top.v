@@ -103,29 +103,6 @@ module top (
     assign img_dn_addr  = dbg_img_dn_addr;
     assign img_dn_last  = dbg_img_dn_last;
 
-    // ProDOS Hard Disk image transfer (2 MB per drive)
-    wire        hd_up_go, hd_up_drive, hd_up_last, hd_up_bad, hd_up_busy, hd_up_done;
-    wire [20:0] hd_up_addr;
-    wire [7:0]  hd_up_data;
-    // The debugger's ProDOS HD transfer outputs go straight to the card.
-    wire        dbg_up_go, dbg_up_drive, dbg_up_last;
-    wire [20:0] dbg_up_addr;
-    wire [7:0]  dbg_up_data;
-    assign hd_up_go    = dbg_up_go;
-    assign hd_up_drive = dbg_up_drive;
-    assign hd_up_addr  = dbg_up_addr;
-    assign hd_up_data  = dbg_up_data;
-    assign hd_up_last  = dbg_up_last;
-    wire        hd_dn_go, hd_dn_drive, hd_dn_last, hd_dn_valid, hd_dn_done;
-    wire [20:0] hd_dn_addr;
-    wire [7:0]  hd_dn_data;
-    wire        dbg_dn_go, dbg_dn_drive, dbg_dn_last;
-    wire [20:0] dbg_dn_addr;
-    assign hd_dn_go    = dbg_dn_go;
-    assign hd_dn_drive = dbg_dn_drive;
-    assign hd_dn_addr  = dbg_dn_addr;
-    assign hd_dn_last  = dbg_dn_last;
-
     // Asserted by the debugger's "x" (CPU reset) command; consumed by the core
     wire        cpu_reset_req;
 
@@ -183,21 +160,6 @@ module top (
         .img_dn_data(img_dn_data),
         .img_dn_valid(img_dn_valid),
         .img_dn_done(img_dn_done),
-        .hd_up_go(dbg_up_go),
-        .hd_up_drive(dbg_up_drive),
-        .hd_up_addr(dbg_up_addr),
-        .hd_up_data(dbg_up_data),
-        .hd_up_last(dbg_up_last),
-        .hd_up_bad(hd_up_bad),
-        .hd_up_busy(hd_up_busy),
-        .hd_up_done(hd_up_done),
-        .hd_dn_go(dbg_dn_go),
-        .hd_dn_drive(dbg_dn_drive),
-        .hd_dn_addr(dbg_dn_addr),
-        .hd_dn_last(dbg_dn_last),
-        .hd_dn_data(hd_dn_data),
-        .hd_dn_valid(hd_dn_valid),
-        .hd_dn_done(hd_dn_done),
         .cpu_pc(debug_cpu_pc),
         .dsk_head(debug_dsk_head),
         .cpu_a(debug_cpu_a),
@@ -265,20 +227,12 @@ module top (
     wire [21:0] dsk_store_addr;
     wire [15:0] dsk_store_wdata, dsk_store_rdata;
 
-    // The ProDOS hard disk SDRAM port, from the core's copy of the card.
-    wire        hd_store_go, hd_store_we, hd_store_ack, hd_store_idle;
-    wire [21:0] hd_store_addr;
-    wire [15:0] hd_store_wdata, hd_store_rdata;
-
     aux_ram u_aux (
         .clk(clk_pixel), .reset(sys_reset),
         .fill_start(aux_fill_start), .fill_addr(aux_fill_addr), .col(aux_col),
         .line_data(aux_line_data),
         .rd_want(aux_rd_want), .rd_addr(aux_rd_addr), .rd_data(aux_rd_data), .rd_hit(aux_rd_hit),
         .wr_go(aux_wr_go), .wr_addr(aux_wr_addr), .wr_data(aux_wr_data), .wr_busy(aux_wr_busy),
-        .hd_go(hd_store_go), .hd_addr(hd_store_addr), .hd_we(hd_store_we),
-        .hd_wdata(hd_store_wdata), .hd_rdata(hd_store_rdata),
-        .hd_ack(hd_store_ack), .hd_idle(hd_store_idle),
         .dsk_go(dsk_store_go), .dsk_addr(dsk_store_addr), .dsk_we(dsk_store_we),
         .dsk_wdata(dsk_store_wdata), .dsk_rdata(dsk_store_rdata),
         .dsk_ack(dsk_store_ack), .dsk_idle(dsk_store_idle),
@@ -320,10 +274,6 @@ module top (
         .dsk_store_we(dsk_store_we), .dsk_store_wdata(dsk_store_wdata),
         .dsk_store_rdata(dsk_store_rdata), .dsk_store_ack(dsk_store_ack),
         .dsk_store_idle(dsk_store_idle),
-        .hd_store_go(hd_store_go), .hd_store_addr(hd_store_addr),
-        .hd_store_we(hd_store_we), .hd_store_wdata(hd_store_wdata),
-        .hd_store_rdata(hd_store_rdata), .hd_store_ack(hd_store_ack),
-        .hd_store_idle(hd_store_idle),
         .cpu_rdy(cpu_rdy),
         .dbg_mem_addr(dbg_mem_addr),
         .dbg_mem_din(dbg_mem_din),
@@ -344,21 +294,6 @@ module top (
         .img_dn_data(img_dn_data),
         .img_dn_valid(img_dn_valid),
         .img_dn_done(img_dn_done),
-        .hd_up_go(hd_up_go),
-        .hd_up_drive(hd_up_drive),
-        .hd_up_addr(hd_up_addr),
-        .hd_up_data(hd_up_data),
-        .hd_up_last(hd_up_last),
-        .hd_up_bad(hd_up_bad),
-        .hd_up_busy(hd_up_busy),
-        .hd_up_done(hd_up_done),
-        .hd_dn_go(hd_dn_go),
-        .hd_dn_drive(hd_dn_drive),
-        .hd_dn_addr(hd_dn_addr),
-        .hd_dn_last(hd_dn_last),
-        .hd_dn_data(hd_dn_data),
-        .hd_dn_valid(hd_dn_valid),
-        .hd_dn_done(hd_dn_done),
         .debug_cpu_pc(debug_cpu_pc),
         .debug_dsk_head(debug_dsk_head),
         .debug_cpu_addr(debug_cpu_addr),

@@ -10,9 +10,6 @@ import {
   prepareDownloadImage,
   uploadDisk,
   downloadDisk,
-  validateHardDiskImage,
-  uploadHardDisk,
-  downloadHardDisk,
   diskChecksum,
   queryDiskSums,
 } from './disk.js'
@@ -115,7 +112,6 @@ export interface DriveState {
 
 export interface DiskProgress {
   drive: 1 | 2
-  device?: 'floppy' | 'harddisk'
   phase: 'uploading' | 'downloading'
   percent: number
   detail: string
@@ -405,10 +401,6 @@ export function useApple() {
     1: { filename: null, busy: false },
     2: { filename: null, busy: false },
   })
-  const [hardDrives, setHardDrives] = useState<Record<1 | 2, DriveState>>({
-    1: { filename: null, busy: false },
-    2: { filename: null, busy: false },
-  })
   const [diskProgress, setDiskProgress] = useState<DiskProgress | null>(null)
   const [diskError, setDiskError] = useState<string | null>(null)
 
@@ -439,8 +431,7 @@ export function useApple() {
         if (onBoard !== sum) {
           setDiskProgress({
             drive,
-            device: 'floppy',
-            phase: 'uploading',
+              phase: 'uploading',
             percent: 0,
             detail: `Starting upload of ${file.name}...`,
           })
@@ -451,8 +442,7 @@ export function useApple() {
             const percent = Math.round((p.track / p.totalTracks) * 100)
             setDiskProgress({
               drive,
-              device: 'floppy',
-              phase: 'uploading',
+                  phase: 'uploading',
               percent,
               detail: `Track ${p.track}/${p.totalTracks} (${percent}%)`,
             })
@@ -541,7 +531,6 @@ export function useApple() {
 
         setDiskProgress({
           drive,
-          device: 'floppy',
           phase: 'downloading',
           percent: 0,
           detail: `Starting download from Drive ${drive}...`,
@@ -552,8 +541,7 @@ export function useApple() {
             const percent = Math.round((p.bytesReceived / p.totalBytes) * 100)
             setDiskProgress({
               drive,
-              device: 'floppy',
-              phase: 'downloading',
+                  phase: 'downloading',
               percent,
               detail: `${Math.round(p.bytesReceived / 1024)} KB / ${Math.round(p.totalBytes / 1024)} KB (${percent}%)`,
             })
@@ -603,142 +591,6 @@ export function useApple() {
     setDrives((d) => ({ ...d, [drive]: { filename: null, busy: false } }))
   }, [])
 
-  const uploadHardDiskFile = useCallback(
-    async (drive: 1 | 2, file: File) => {
-      if (!link.current || conn.state !== 'open') {
-        throw new Error('Connect USB serial before uploading a hard disk image.')
-      }
-      setDiskError(null)
-      setHardDrives((d) => ({ ...d, [drive]: { ...d[drive], busy: true } }))
-      const wasConsole = stream.current.mode === 'console'
-
-      try {
-        const buffer = await file.arrayBuffer()
-        const { data } = validateHardDiskImage(buffer, file.name)
-
-        if (wasConsole) {
-          send([CTRL_B])
-          await new Promise((r) => setTimeout(r, QUIET_MS))
-        }
-
-        setDiskProgress({
-          drive,
-          device: 'harddisk',
-          phase: 'uploading',
-          percent: 0,
-          detail: `Starting upload of ${file.name}...`,
-        })
-
-        await uploadHardDisk(link.current, drive, data, {
-          onProgress: (p) => {
-            const percent = Math.round((p.chunk / p.totalChunks) * 100)
-            setDiskProgress({
-              drive,
-              device: 'harddisk',
-              phase: 'uploading',
-              percent,
-              detail: `Chunk ${p.chunk}/${p.totalChunks} (${percent}%)`,
-            })
-          },
-        })
-
-        setHardDrives((d) => ({ ...d, [drive]: { filename: file.name, busy: false } }))
-        setDiskProgress(null)
-
-        if (wasConsole) {
-          release(CMD.cont.charCodeAt(0))
-        }
-      } catch (err: any) {
-        setHardDrives((d) => ({ ...d, [drive]: { ...d[drive], busy: false } }))
-        setDiskProgress(null)
-        const msg = err?.message ?? String(err)
-        setDiskError(msg)
-        if (wasConsole) {
-          release(CMD.cont.charCodeAt(0))
-        }
-        throw err
-      }
-    },
-    [conn.state, mode, send, release],
-  )
-
-  const downloadHardDiskFile = useCallback(
-    async (drive: 1 | 2) => {
-      if (!link.current || conn.state !== 'open') {
-        throw new Error('Connect USB serial before downloading a hard disk image.')
-      }
-      setDiskError(null)
-      setHardDrives((d) => ({ ...d, [drive]: { ...d[drive], busy: true } }))
-      const wasConsole = stream.current.mode === 'console'
-
-      try {
-        if (wasConsole) {
-          send([CTRL_B])
-          await new Promise((r) => setTimeout(r, QUIET_MS))
-        }
-
-        setDiskProgress({
-          drive,
-          device: 'harddisk',
-          phase: 'downloading',
-          percent: 0,
-          detail: `Starting download from Slot 7 Drive ${drive}...`,
-        })
-
-        const fileData = await downloadHardDisk(link.current, drive, {
-          onProgress: (p) => {
-            const percent = Math.round((p.bytesReceived / p.totalBytes) * 100)
-            setDiskProgress({
-              drive,
-              device: 'harddisk',
-              phase: 'downloading',
-              percent,
-              detail: `${Math.round(p.bytesReceived / 1024)} KB / ${Math.round(p.totalBytes / 1024)} KB (${percent}%)`,
-            })
-          },
-        })
-
-        setHardDrives((d) => ({ ...d, [drive]: { ...d[drive], busy: false } }))
-        setDiskProgress(null)
-
-        const baseName = hardDrives[drive].filename
-          ? hardDrives[drive].filename!.replace(/\.[^.]+$/, '')
-          : `hd7_d${drive}`
-        const filename = `${baseName}.po`
-
-        if (typeof document !== 'undefined') {
-          const blob = new Blob([fileData as unknown as BlobPart], { type: 'application/octet-stream' })
-          const url = URL.createObjectURL(blob)
-          const a = document.createElement('a')
-          a.href = url
-          a.download = filename
-          document.body.appendChild(a)
-          a.click()
-          document.body.removeChild(a)
-          URL.revokeObjectURL(url)
-        }
-
-        if (wasConsole) {
-          release(CMD.cont.charCodeAt(0))
-        }
-      } catch (err: any) {
-        setHardDrives((d) => ({ ...d, [drive]: { ...d[drive], busy: false } }))
-        setDiskProgress(null)
-        const msg = err?.message ?? String(err)
-        setDiskError(msg)
-        if (wasConsole) {
-          release(CMD.cont.charCodeAt(0))
-        }
-        throw err
-      }
-    },
-    [conn.state, mode, send, release, hardDrives],
-  )
-
-  const ejectHardDisk = useCallback((drive: 1 | 2) => {
-    setHardDrives((d) => ({ ...d, [drive]: { filename: null, busy: false } }))
-  }, [])
-
   const clearDiskError = useCallback(() => setDiskError(null), [])
 
   const clearConsole = useCallback(() => setLines([]), [])
@@ -760,15 +612,11 @@ export function useApple() {
       screen,
       busy,
       drives,
-      hardDrives,
       diskProgress,
       diskError,
       uploadDiskFile,
       downloadDiskFile,
       ejectDisk,
-      uploadHardDiskFile,
-      downloadHardDiskFile,
-      ejectHardDisk,
       clearDiskError,
       pressKey,
       resetKey,
@@ -795,15 +643,11 @@ export function useApple() {
       screen,
       busy,
       drives,
-      hardDrives,
       diskProgress,
       diskError,
       uploadDiskFile,
       downloadDiskFile,
       ejectDisk,
-      uploadHardDiskFile,
-      downloadHardDiskFile,
-      ejectHardDisk,
       clearDiskError,
       pressKey,
       resetKey,

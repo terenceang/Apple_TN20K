@@ -96,7 +96,7 @@ if (-not (Test-Path -LiteralPath (Join-Path $root 'roms\disk2_p6.hex'))) {
 # apple2_core, so both need the card with it; tb_disk2 drives the card on its
 # own and does not want the core.
 $disk2 = @('src/disk2/disk2_card.v', 'src/disk2/disk2_store.v')
-$core  = @('src/apple2_core.v', 'src/apple2_mem.v', 'src/slot_bus.v', 'src/prodos/prodos_card.v',
+$core  = @('src/apple2_core.v', 'src/apple2_mem.v', 'src/slot_bus.v',
            'src/cpu/cpu_65c02.v', 'src/cpu/ALU.v') + $disk2
 Run-Tb 'tb_disk2'        $disk2 -Gen '2012' -Defines $disk2Defines
 Run-Tb 'tb_diskimg'      @('src/serial_debugger.v', 'src/disk2/disk2_store.v') -Gen '2012'

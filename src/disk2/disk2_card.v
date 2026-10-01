@@ -149,6 +149,7 @@ module disk2_card (
     reg        drive_q = 1'b0;      // 0 = drive 1
     reg [7:0]  head_q  = 8'd0;     // the track under the head, 0..34
     reg        wr_mode_q = 1'b0;   // Q7: the read/write mode select
+    reg        q6_q      = 1'b0;   // Q6: set by $C0ED, cleared by $C0EC
     reg        started    = 1'b0;  // the first tick after reset presents byte 0 without moving on
     reg        rdy_q      = 1'b0;  // a byte has arrived under the head and has not been read
     reg [7:0]  wr_latch   = 8'h00; // the write-mode data register
@@ -454,9 +455,12 @@ module disk2_card (
             started   <= 1'b0;
             shift_cnt <= 6'd0;
             wr_mode_q <= 1'b0;
+            q6_q      <= 1'b0;
             wr_latch  <= 8'h00;
             rdy_q     <= 1'b0;
         end else begin
+            if (q6l_sel)          q6_q      <= 1'b0;   // $C0EC: Q6 low
+            if (q7l_sel)          q6_q      <= 1'b1;   // $C0ED: Q6 high
             if (q7_rd)            wr_mode_q <= 1'b0;   // $C0EF read: read mode
             if (q7_sel && cpu_we) wr_mode_q <= 1'b1;   // $C0EF write: write mode
             if (q6l_sel && cpu_we) wr_latch <= cpu_di;  // preload a write byte
@@ -498,12 +502,15 @@ module disk2_card (
     assign store_wr_data  = in_data;
     assign store_wr_off   = data_off;
 
-    // The data register.  In read mode it is the shift register; in write mode
-    // a read of it is the write-protect sense, so the motor's drive with no
-    // image behind it (or a read-only one) reports protected.
+    // The data register.  In read mode it is the shift register.  With Q6 high
+    // and Q7 low (LDA $C08D,X then LDA $C08E,X, which is how DOS and ProDOS
+    // check) a read of it is the write-protect sense, bit 7 set when protected;
+    // a drive with no image behind it (or a read-only one) reports protected.
+    // In write mode a read gives the same.
     wire wr_protected = !store_drv_writable[drive_q];
+    wire sense_wp     = wr_mode_q || q6_q;
     wire [7:0] rd_byte = byte_ok ? synth_byte : {1'b0, synth_byte[6:0]};
-    wire [7:0] data_rd = wr_mode_q ? (wr_protected ? 8'h80 : 8'h00) : rd_byte;
+    wire [7:0] data_rd = sense_wp ? (wr_protected ? 8'h80 : 8'h00) : rd_byte;
 
     // What the card drives onto $C0E0-$C0EF: the data register at Q6L and Q6,
     // and the floating bus at the rest of the window.

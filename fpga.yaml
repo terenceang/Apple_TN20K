@@ -13,7 +13,6 @@ sources:
   - src/slot_bus.v
   - src/disk2/disk2_card.v
   - src/disk2/disk2_store.v
-  - src/prodos/prodos_card.v
   - src/apple2_core.v
   - src/video_generator.v
   - src/colorbar_gen.v
