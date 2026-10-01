@@ -12,7 +12,8 @@
 # ============================================================================
 [CmdletBinding()]
 param(
-    [switch]$Flash
+    [switch]$Flash,
+    [ValidateSet('top', 'sdtest')][string]$Top = 'top'   # sdtest: the raw SD FAT32 test bitstream
 )
 $ErrorActionPreference = 'Stop'
 
@@ -21,6 +22,7 @@ Set-Location $root
 . (Join-Path $PSScriptRoot 'toolchain.ps1')
 
 $name = Get-FpgaName
+if ($Top -eq 'sdtest') { $name = 'sdtest' }
 $fs   = (Resolve-Path "build/bitstream/$name.fs").Path
 
 $gowinProg = 'C:\Gowin\Gowin_V1.9.12_x64\Programmer\bin\programmer_cli.exe'

@@ -37,7 +37,13 @@ module top (
     inout  wire [31:0] IO_sdram_dq,
     output wire [10:0] O_sdram_addr,
     output wire [1:0]  O_sdram_ba,
-    output wire [3:0]  O_sdram_dqm
+    output wire [3:0]  O_sdram_dqm,
+
+    // TF card slot (SPI mode): ProDOS drive 1 is loaded from it at power-up
+    output wire        sd_clk,
+    output wire        sd_mosi,   // SD_CMD
+    input  wire        sd_miso,   // SD_DAT0
+    output wire        sd_cs_n    // SD_DAT3
 );
 
     // Power-on and Button Reset Generator (S2 pushbutton triggers reset when pressed = 1)
@@ -87,17 +93,21 @@ module top (
     wire        img_dn_go, img_dn_drive, img_dn_last, img_dn_valid, img_dn_done;
     wire [17:0] img_dn_addr;
     wire [7:0]  img_dn_data;
-    // The debugger's Disk II transfer outputs go straight to the store.
+    // The debugger's own Disk II transfer outputs; the SD file controller takes the upload
+    // port while it loads a mounted file (d2_own).
     wire        dbg_img_up_go, dbg_img_up_drive, dbg_img_up_last;
     wire [17:0] dbg_img_up_addr;
     wire [7:0]  dbg_img_up_data;
     wire        dbg_img_dn_go, dbg_img_dn_drive, dbg_img_dn_last;
     wire [17:0] dbg_img_dn_addr;
-    assign img_up_go    = dbg_img_up_go;
-    assign img_up_drive = dbg_img_up_drive;
-    assign img_up_addr  = dbg_img_up_addr;
-    assign img_up_data  = dbg_img_up_data;
-    assign img_up_last  = dbg_img_up_last;
+    wire        sd_d2_own, sd_d2_up_go, sd_hd_own, sd_hd_up_go, sd_up_drive, sd_up_last, sd_dn_go;
+    wire [20:0] sd_up_addr, sd_dn_addr;
+    wire [7:0]  sd_up_data;
+    assign img_up_go    = sd_d2_own ? sd_d2_up_go          : dbg_img_up_go;
+    assign img_up_drive = sd_d2_own ? sd_up_drive          : dbg_img_up_drive;
+    assign img_up_addr  = sd_d2_own ? sd_up_addr[17:0]     : dbg_img_up_addr;
+    assign img_up_data  = sd_d2_own ? sd_up_data           : dbg_img_up_data;
+    assign img_up_last  = sd_d2_own ? sd_up_last           : dbg_img_up_last;
     assign img_dn_go    = dbg_img_dn_go;
     assign img_dn_drive = dbg_img_dn_drive;
     assign img_dn_addr  = dbg_img_dn_addr;
@@ -107,24 +117,32 @@ module top (
     wire        hd_up_go, hd_up_drive, hd_up_last, hd_up_bad, hd_up_busy, hd_up_done;
     wire [20:0] hd_up_addr;
     wire [7:0]  hd_up_data;
-    // The debugger's ProDOS HD transfer outputs go straight to the card.
+    // The debugger's own upload outputs; the SD file controller owns the port while it loads (hd_own).
     wire        dbg_up_go, dbg_up_drive, dbg_up_last;
     wire [20:0] dbg_up_addr;
     wire [7:0]  dbg_up_data;
-    assign hd_up_go    = dbg_up_go;
-    assign hd_up_drive = dbg_up_drive;
-    assign hd_up_addr  = dbg_up_addr;
-    assign hd_up_data  = dbg_up_data;
-    assign hd_up_last  = dbg_up_last;
+    wire        dbg_uart_tx, sd_rpt_tx, sd_rpt_busy;
+    assign uart_tx = sd_rpt_busy ? sd_rpt_tx : dbg_uart_tx;   // SD boot status line, first seconds only
+    wire        hd_wr_req, hd_wr_ack;
+    wire [11:0] hd_wr_blk;
+    assign hd_up_go    = sd_hd_own ? sd_hd_up_go : dbg_up_go;
+    assign hd_up_drive = sd_hd_own ? sd_up_drive : dbg_up_drive;
+    assign hd_up_addr  = sd_hd_own ? sd_up_addr  : dbg_up_addr;
+    assign hd_up_data  = sd_hd_own ? sd_up_data  : dbg_up_data;
+    assign hd_up_last  = sd_hd_own ? sd_up_last  : dbg_up_last;
     wire        hd_dn_go, hd_dn_drive, hd_dn_last, hd_dn_valid, hd_dn_done;
     wire [20:0] hd_dn_addr;
     wire [7:0]  hd_dn_data;
     wire        dbg_dn_go, dbg_dn_drive, dbg_dn_last;
     wire [20:0] dbg_dn_addr;
-    assign hd_dn_go    = dbg_dn_go;
-    assign hd_dn_drive = dbg_dn_drive;
-    assign hd_dn_addr  = dbg_dn_addr;
-    assign hd_dn_last  = dbg_dn_last;
+    assign hd_dn_go    = hd_wr_req ? sd_dn_go   : dbg_dn_go;
+    assign hd_dn_drive = hd_wr_req ? 1'b0       : dbg_dn_drive;
+    assign hd_dn_addr  = hd_wr_req ? sd_dn_addr : dbg_dn_addr;
+    assign hd_dn_last  = hd_wr_req ? 1'b0       : dbg_dn_last;
+
+    // The SD file manager session: the debugger passes the host's bytes through while f_active
+    wire        f_start, f_rx_valid, f_tx_ready, f_tx_valid, f_active;
+    wire [7:0]  f_rx_byte, f_tx_byte;
 
     // Asserted by the debugger's "x" (CPU reset) command; consumed by the core
     wire        cpu_reset_req;
@@ -157,7 +175,7 @@ module top (
         .clk(clk_pixel),
         .reset(sys_reset),
         .ce_1m(ce_1m),
-        .uart_tx(uart_tx),
+        .uart_tx(dbg_uart_tx),
         .rx_byte(rx_byte),
         .rx_valid(rx_valid),
         .dbg_mode(dbg_mode),
@@ -197,6 +215,8 @@ module top (
         .hd_dn_data(hd_dn_data),
         .hd_dn_valid(hd_dn_valid),
         .hd_dn_done(hd_dn_done),
+        .f_start(f_start), .f_rx_valid(f_rx_valid), .f_rx_byte(f_rx_byte), .f_tx_ready(f_tx_ready),
+        .f_tx_valid(f_tx_valid), .f_tx_byte(f_tx_byte), .f_active(f_active),
         .cpu_pc(debug_cpu_pc),
         .cpu_a(debug_cpu_a),
         .cpu_x(debug_cpu_x),
@@ -267,6 +287,19 @@ module top (
     wire        hd_store_go, hd_store_we, hd_store_ack, hd_store_idle;
     wire [21:0] hd_store_addr;
     wire [15:0] hd_store_wdata, hd_store_rdata;
+
+    sd_files u_sd_files (
+        .clk(clk_pixel), .reset(sys_reset),
+        .sd_clk(sd_clk), .sd_mosi(sd_mosi), .sd_miso(sd_miso), .sd_cs_n(sd_cs_n),
+        .f_start(f_start), .f_rx_valid(f_rx_valid), .f_rx_byte(f_rx_byte),
+        .f_tx_valid(f_tx_valid), .f_tx_byte(f_tx_byte), .f_tx_ready(f_tx_ready), .f_active(f_active),
+        .d2_own(sd_d2_own), .d2_up_go(sd_d2_up_go), .hd_own(sd_hd_own), .hd_up_go(sd_hd_up_go),
+        .up_drive(sd_up_drive), .up_addr(sd_up_addr), .up_data(sd_up_data), .up_last(sd_up_last),
+        .d2_up_busy(img_up_busy), .d2_up_done(img_up_done), .hd_up_busy(hd_up_busy), .hd_up_done(hd_up_done),
+        .wr_req(hd_wr_req), .wr_blk(hd_wr_blk), .wr_ack(hd_wr_ack),
+        .hd_dn_go(sd_dn_go), .hd_dn_addr(sd_dn_addr), .hd_dn_data(hd_dn_data), .hd_dn_valid(hd_dn_valid),
+        .rpt_tx(sd_rpt_tx), .rpt_busy(sd_rpt_busy)
+    );
 
     aux_ram u_aux (
         .clk(clk_pixel), .reset(sys_reset),
@@ -342,6 +375,7 @@ module top (
         .img_dn_data(img_dn_data),
         .img_dn_valid(img_dn_valid),
         .img_dn_done(img_dn_done),
+        .hd_wr_req(hd_wr_req), .hd_wr_blk(hd_wr_blk), .hd_wr_ack(hd_wr_ack),
         .hd_up_go(hd_up_go),
         .hd_up_drive(hd_up_drive),
         .hd_up_addr(hd_up_addr),

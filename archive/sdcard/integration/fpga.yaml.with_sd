@@ -14,6 +14,11 @@ sources:
   - src/disk2/disk2_card.v
   - src/disk2/disk2_store.v
   - src/prodos/prodos_card.v
+  - src/sd/spi_byte.v
+  - src/sd/sd_blk.v
+  - src/sd/fat32.v
+  - src/sd/sd_files.v
+  - src/uart_tx.v
   - src/apple2_core.v
   - src/video_generator.v
   - src/colorbar_gen.v
@@ -27,6 +32,15 @@ sources:
   - src/hdmi/hdmi_island_scheduler.v
   - src/hdmi/hdmi_tx.v
   - src/top.v
+
+# The raw SD FAT32 test bitstream (scripts/build.ps1 -Top sdtest): no Apple core
+sdtest_sources:
+  - src/sd/spi_byte.v
+  - src/sd/sd_blk.v
+  - src/sd/fat32.v
+  - src/uart_tx.v
+  - src/sdtest/fat_test.v
+  - src/sdtest/top_sdtest.v
 
 constraints:
   - constraints/top.cst

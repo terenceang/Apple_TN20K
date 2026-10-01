@@ -1,7 +1,8 @@
 // ============================================================================
 //  sd_blk.v -- SD card (SPI mode, SDHC) 512-byte block read/write with a
-//  512-byte buffer.  Engine lifted from src/prodos/sd_loader.v (kept separate
-//  so the boot loader is untouched).
+//  512-byte buffer.  Sibling of src/prodos/sd_loader.v (kept separate
+//  so the boot loader keeps its streaming interface; the SPI byte engine and
+//  the command set are shared: src/sd/spi_byte.v, src/sd/sd_defs.vh).
 //
 //  Pulse `rd` or `wr` (with `lba`) for one clock while !busy.  `busy` is high
 //  from reset through init and during every operation; `err` latches on any
@@ -18,7 +19,7 @@ module sd_blk #(
 ) (
     input  wire        clk,            // 27 MHz
     input  wire        reset,
-    output reg         sd_clk,
+    output wire        sd_clk,
     output wire        sd_mosi,
     input  wire        sd_miso,
     output reg         sd_cs_n,
@@ -36,33 +37,14 @@ module sd_blk #(
     input  wire [7:0]  bwd,
     output reg  [7:0]  brd
 );
-    // ---- SPI byte engine (mode 0; 211 kHz for init, 6.75 MHz after) ----
+    // ---- SPI byte engine (src/sd/spi_byte.v) ----
     reg        fast;
-    reg  [7:0] sh, txb;
-    reg  [3:0] bits;
-    reg  [6:0] hc;
-    reg        spi_go, spi_busy, spi_done, rxb;
-    wire [6:0] half = fast ? 7'd1 : 7'd63;
-    assign sd_mosi = sh[7];
-
-    always @(posedge clk) begin
-        spi_done <= 1'b0;
-        if (reset) begin
-            sd_clk <= 1'b0; spi_busy <= 1'b0;
-        end else if (spi_go) begin
-            sh <= txb; bits <= 4'd0; hc <= half; spi_busy <= 1'b1;
-        end else if (spi_busy) begin
-            if (hc != 0) hc <= hc - 1'b1;
-            else begin
-                hc <= half;
-                if (!sd_clk) begin sd_clk <= 1'b1; rxb <= sd_miso; end
-                else begin
-                    sd_clk <= 1'b0; sh <= {sh[6:0], rxb}; bits <= bits + 1'b1;
-                    if (bits == 4'd7) begin spi_busy <= 1'b0; spi_done <= 1'b1; end
-                end
-            end
-        end
-    end
+    reg  [7:0] txb;
+    reg        spi_go;
+    wire       spi_done;
+    wire [7:0] sh;
+    spi_byte u_spi (.clk(clk), .reset(reset), .fast(fast), .go(spi_go), .tx(txb), .rx(sh),
+                    .done(spi_done), .sd_clk(sd_clk), .sd_mosi(sd_mosi), .sd_miso(sd_miso));
 
     // ---- sector buffer: the engine owns it while busy ----
     reg [7:0] mem [0:511];
@@ -79,18 +61,7 @@ module sd_blk #(
     localparam [3:0] PWR = 0, DUM = 1, CMDS = 2, R1 = 3, EXTRA = 4, DTOK = 5, DATA = 6,
                      CRC = 7, IDLE = 8, WGAP = 9, WTOK = 10, WWAIT = 11, WBYTE = 12,
                      WCRC = 13, WRESP = 14, WBSY = 15;
-    localparam [2:0] CMD0 = 0, CMD8 = 1, CMD55 = 2, ACMD41 = 3, CMD17 = 4, CMD24 = 5;
-
-    function [47:0] cmdw(input [2:0] p, input [31:0] l);
-        case (p)
-            CMD0:   cmdw = {8'h40, 32'h0,        8'h95};
-            CMD8:   cmdw = {8'h48, 32'h000001AA, 8'h87};
-            CMD55:  cmdw = {8'h77, 32'h0,        8'h01};
-            ACMD41: cmdw = {8'h69, 32'h40000000, 8'h01};
-            CMD24:  cmdw = {8'h58, l,            8'h01};
-            default:cmdw = {8'h51, l,            8'h01};
-        endcase
-    endfunction
+`include "src/sd/sd_defs.vh"
 
     reg [3:0]  st;
     reg [2:0]  ph;

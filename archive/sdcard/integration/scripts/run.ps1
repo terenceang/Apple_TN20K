@@ -78,6 +78,12 @@ Run-Tb 'tb_data_island'  $island
 Run-Tb 'tb_sound'        @('src/sound_generator.v')
 Run-Tb 'tb_input'        @('src/input_controller.v')
 Run-Tb 'tb_slots'        @('src/slot_bus.v')
+Run-Tb 'tb_sd_files'     @('sim/models/sdcard.v', 'src/sd/sd_files.v', 'src/sd/fat32.v', 'src/sd/sd_blk.v', 'src/sd/spi_byte.v', 'src/uart_tx.v') -Gen '2012'
+# sd_loader and the SD test share the byte engine, the UART and the command set
+$sdtest = @(& (Join-Path $root 'scripts\sources.ps1') -Block sdtest_sources | Where-Object { $_ -ne 'src/sdtest/top_sdtest.v' })
+$fat32 = @('sim/models/sdcard.v', 'src/sd/fat32.v', 'src/sd/sd_blk.v', 'src/sd/spi_byte.v')
+Run-Tb 'tb_fat32'        $fat32 -Gen '2012'
+Run-Tb 'tb_fat_test'     (@('sim/models/sdcard.v') + $sdtest) -Gen '2012'
 
 # The card's $C600 boot ROM is Apple copyright and is not in the repo (see
 # roms/README.md), so it is loaded only if the user has put it there, the same

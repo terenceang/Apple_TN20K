@@ -17,7 +17,7 @@ module top_sdtest (
     wire reset = (rst_cnt != 20'hFFFFF);
 
     wire pass, failed;
-    fat_test #(.FORMAT(0)) u_test (.clk(clk), .reset(reset), .sd_clk(sd_clk), .sd_mosi(sd_mosi), .sd_miso(sd_miso),
+    fat_test u_test (.clk(clk), .reset(reset), .sd_clk(sd_clk), .sd_mosi(sd_mosi), .sd_miso(sd_miso),
                      .sd_cs_n(sd_cs_n), .uart_tx(uart_tx), .pass(pass), .failed(failed));
 
     reg [24:0] hb = 0;

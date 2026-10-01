@@ -61,6 +61,10 @@ module prodos_card (
     output reg  [7:0]  down_data,
     output reg         down_valid,
     output reg         down_done,
+    // Write-back request to the SD loader: level until wr_ack; busy stays set meanwhile
+    output reg         wr_req,
+    output reg  [11:0] wr_blk,
+    input  wire        wr_ack,
     output wire [1:0]  drv_present,
     output wire [1:0]  drv_writable
 );
@@ -350,6 +354,8 @@ module prodos_card (
             blk_busy         <= 1'b0;
             blk_fsm_start_rd <= 1'b0;
             blk_fsm_start_wr <= 1'b0;
+            wr_req           <= 1'b0;
+            wr_blk           <= 12'd0;
             bf_state         <= BF_IDLE;
             bf_is_wr         <= 1'b0;
             bf_widx          <= 8'd0;
@@ -375,6 +381,7 @@ module prodos_card (
             writable_q[1]    <= 1'b0;
         end else begin
             // Pulses default low
+            if (wr_ack) begin wr_req <= 1'b0; blk_busy <= 1'b0; end
             hd_go            <= 1'b0;
             up_done          <= 1'b0;
             down_valid       <= 1'b0;
@@ -474,7 +481,10 @@ module prodos_card (
                         end else begin
                             if (bf_widx == 8'd255) begin
                                 bf_state <= BF_IDLE;
-                                blk_busy <= 1'b0;
+                                if (!drv_sel) begin   // drive 1 is backed by the SD card
+                                    wr_req <= 1'b1;
+                                    wr_blk <= blk_num;
+                                end else blk_busy <= 1'b0;
                             end else begin
                                 bf_widx      <= bf_widx + 1'b1;
                                 fsm_buf_addr <= {bf_widx + 1'b1, 1'b0};

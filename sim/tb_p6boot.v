@@ -86,7 +86,6 @@ module tb_p6boot;
         .img_up_last(1'b0), .img_up_bad(1'b0), .img_up_busy(), .img_up_done(),
         .img_dn_go(1'b0), .img_dn_drive(1'b0), .img_dn_addr(18'd0), .img_dn_last(1'b0),
         .img_dn_data(), .img_dn_valid(), .img_dn_done(),
-        .hd_wr_req(), .hd_wr_blk(), .hd_wr_ack(1'b0),
         .hd_up_go(1'b0), .hd_up_drive(1'b0), .hd_up_addr(21'd0), .hd_up_data(8'd0),
         .hd_up_last(1'b0), .hd_up_bad(1'b0), .hd_up_busy(), .hd_up_done(),
         .hd_dn_go(1'b0), .hd_dn_drive(1'b0), .hd_dn_addr(21'd0), .hd_dn_last(1'b0),

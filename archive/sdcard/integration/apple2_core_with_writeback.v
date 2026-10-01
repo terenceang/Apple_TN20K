@@ -94,6 +94,9 @@ module apple2_core (
     output wire        img_dn_done,
 
     // ProDOS Hard Disk image transfer (2 MB per drive)
+    output wire        hd_wr_req,
+    output wire [11:0] hd_wr_blk,
+    input  wire        hd_wr_ack,
     input  wire        hd_up_go,
     input  wire        hd_up_drive,
     input  wire [20:0] hd_up_addr,
@@ -683,6 +686,9 @@ module apple2_core (
         .hd_rdata(hd_store_rdata),
         .hd_ack(hd_store_ack),
         .hd_idle(hd_store_idle),
+        .wr_req(hd_wr_req),
+        .wr_blk(hd_wr_blk),
+        .wr_ack(hd_wr_ack),
         .up_go(hd_up_go),
         .up_drive(hd_up_drive),
         .up_addr(hd_up_addr),
