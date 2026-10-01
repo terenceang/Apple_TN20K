@@ -31,3 +31,6 @@ obj_dir/
 /web/*.png
 # Third-party vendor PDFs (datasheet, schematic) are not ours to redistribute
 /Documents/*.pdf
+
+# Python bytecode
+__pycache__/
