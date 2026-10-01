@@ -28,8 +28,8 @@ export const ACK_BYTE = 0x06 // ASCII ACK returned by serial_debugger.v after ea
  * Logical sector L is stored on physical sector DOS_TO_PHYS[L].
  */
 export const DOS_TO_PHYS = [
-  0x0, 0x7, 0xe, 0x6, 0xd, 0x5, 0xc, 0x4,
-  0xb, 0x3, 0xa, 0x2, 0x9, 0x1, 0x8, 0xf,
+  0x0, 0xd, 0xb, 0x9, 0x7, 0x5, 0x3, 0x1,
+  0xe, 0xc, 0xa, 0x8, 0x6, 0x4, 0x2, 0xf,
 ]
 
 /**
@@ -37,8 +37,8 @@ export const DOS_TO_PHYS = [
  * Physical sector P maps to logical sector PHYS_TO_DOS[P].
  */
 export const PHYS_TO_DOS = [
-  0x0, 0xd, 0xb, 0x9, 0x7, 0x5, 0x3, 0x1,
-  0xe, 0xc, 0xa, 0x8, 0x6, 0x4, 0x2, 0xf,
+  0x0, 0x7, 0xe, 0x6, 0xd, 0x5, 0xc, 0x4,
+  0xb, 0x3, 0xa, 0x2, 0x9, 0x1, 0x8, 0xf,
 ]
 
 /**
@@ -393,6 +393,42 @@ export async function downloadDisk(link, drive, opts = {}) {
     await reader.waitFor(() => decoder.decode(reader.buffer).includes('done'), timeoutMs)
 
     return physicalBytes
+  } finally {
+    reader.restore()
+  }
+}
+
+/**
+ * The fingerprint the FPGA keeps for a Disk II image: rotate left one and add each
+ * byte, modulo 2^32 (serial_debugger.v dsk_sum0/1).  Hash the bytes that go over
+ * the wire, i.e. after prepareUploadImage.  The board reports 0 for an empty drive.
+ *
+ * @param {Uint8Array} bytes
+ * @returns {number}
+ */
+export function diskChecksum(bytes) {
+  let s = 0
+  for (let i = 0; i < bytes.length; i++) s = (((s << 1) | (s >>> 31)) + bytes[i]) >>> 0
+  return s
+}
+
+/**
+ * Ask the debugger (which must already be paused) what each Disk II holds.
+ * `i` answers "I1:xxxxxxxx I2:xxxxxxxx".
+ *
+ * @param {{ write: (b: Uint8Array | number[]) => void, onBytes: (b: Uint8Array) => void }} link
+ * @param {{ timeoutMs?: number }} [opts]
+ * @returns {Promise<[number, number]>} checksums of drive 1 and 2; 0 = empty
+ */
+export async function queryDiskSums(link, opts = {}) {
+  const reader = new LinkStreamReader(link)
+  const decoder = new TextDecoder()
+  const re = /I1:([0-9A-F]{8}) I2:([0-9A-F]{8})/
+  try {
+    link.write([0x69]) // 'i'
+    await reader.waitFor(() => re.test(decoder.decode(reader.buffer)), opts.timeoutMs ?? 3000)
+    const m = re.exec(decoder.decode(reader.buffer))
+    return [parseInt(m[1], 16), parseInt(m[2], 16)]
   } finally {
     reader.restore()
   }

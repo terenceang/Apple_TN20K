@@ -18,6 +18,7 @@
 //      1 or 2, one byte at a time, with no framing and no way to interrupt
 //   e1 e2  download a Disk ][ image: 143,360 bytes of drive 1 or 2 come back,
 //      then a prompt
+//   i  print the Disk ][ image checksums: "I1:xxxxxxxx I2:xxxxxxxx", 0 = empty
 //   0 1 4 8 f v  set the memory dump address ($0000 $0100 $0400 $0800
 //      $FA60 $FFF0) before m
 // 2. Hardware Debugger Mode (Toggle with Ctrl+B / ASCII 0x02):
@@ -59,6 +60,7 @@ module serial_debugger (
 
     // 65C02 CPU Registers & Bus Snooping
     input  wire [15:0] cpu_pc,
+    input  wire [7:0]  dsk_head,     // the Disk ][ head's track, shown by i
     input  wire [7:0]  cpu_a,
     input  wire [7:0]  cpu_x,
     input  wire [7:0]  cpu_y,
@@ -391,6 +393,7 @@ module serial_debugger (
     localparam M_STATUS  = 4'd5;
     localparam M_SCREEN  = 4'd6;
     localparam M_IMG     = 4'd7;   // a Disk ][ or ProDOS HD image, in or out
+    localparam M_INFO    = 4'd8;   // the Disk ][ checksums (the i command)
 
     // Disk ][ image: 143,360 bytes (35 tracks x 16 sectors x 256 bytes)
     localparam [17:0] IMG_BYTES = 18'd143360;
@@ -437,6 +440,15 @@ module serial_debugger (
     reg        img_ask  = 1'b0;      // a download request is out
     reg        img_ackq = 1'b0;      // an acknowledgement is waiting for room
     reg [21:0] img_rx   = 22'd0;     // bytes that arrived during the upload
+
+    // What each Disk ][ holds, as a fingerprint the host can compare with the
+    // file it would upload: 0 when empty (cleared at reset, at the start of an
+    // upload and when one is lost), otherwise the rotate-and-add of every byte
+    // handed to the store.  web/src/disk.js diskChecksum() is the same sum.
+    reg [31:0] dsk_sum0 = 32'd0;
+    reg [31:0] dsk_sum1 = 32'd0;
+    wire [31:0] dsk_cur = img_drv ? dsk_sum1 : dsk_sum0;
+    wire [31:0] dsk_nxt = {dsk_cur[30:0], dsk_cur[31]} + {24'd0, img_byte};
     reg        img_cmd  = 1'b0;      // command seen; the next digit picks the drive
 
     // Screen dump state. The W command streams the 1 KB text page the video
@@ -578,6 +590,8 @@ module serial_debugger (
             hd_up_bad      <= 1'b0;
             hd_dn_go       <= 1'b0;
             img_rx         <= 22'd0;
+            dsk_sum0       <= 32'd0;
+            dsk_sum1       <= 32'd0;
         end else begin
             fifo_push_en <= 1'b0;
             // All requests are one-clock pulses and the stores take one
@@ -726,6 +740,10 @@ module serial_debugger (
                             img_drv    <= (rx_byte == "2");
                             img_addr   <= 21'd0;
                             img_rx     <= 22'd0;
+                            if (!img_is_hd && !img_dir) begin
+                                if (rx_byte == "2") dsk_sum1 <= 32'd0;
+                                else                dsk_sum0 <= 32'd0;
+                            end
                             img_have   <= 1'b0;
                             img_sent   <= 1'b0;
                             img_ask    <= 1'b0;
@@ -768,6 +786,11 @@ module serial_debugger (
                     "8":     dump_addr <= 16'h0800;
                     "f", "F": dump_addr <= 16'hFA60;
                     "v", "V": dump_addr <= 16'hFFF0;
+
+                    "i", "I": begin
+                        main_state <= M_INFO;
+                        seq_step   <= 5'd0;
+                    end
 
                     "t", "T": begin
                         main_state <= M_STATUS;
@@ -1098,6 +1121,58 @@ module serial_debugger (
                 end
 
                 // -------------------------------------------------------------
+                // Disk ][ checksums: CRLF, I1:xxxxxxxx I2:xxxxxxxx, a prompt
+                // -------------------------------------------------------------
+                M_INFO: begin
+                    case (seq_step)
+                        5'd0: begin
+                            str_pos    <= STR_CRLF_START;
+                            str_cnt    <= STR_CRLF_LEN;
+                            return_job <= M_INFO;
+                            seq_step   <= 5'd1;
+                            main_state <= M_STR;
+                        end
+                        5'd1:  if (!tx_fifo_full) begin fifo_push("I"); seq_step <= 5'd2; end
+                        5'd2:  if (!tx_fifo_full) begin fifo_push("1"); seq_step <= 5'd3; end
+                        5'd3:  if (!tx_fifo_full) begin fifo_push(":"); seq_step <= 5'd4; end
+                        5'd4: begin
+                            hex_val <= dsk_sum0[31:16]; hex_digits <= 3'd4;
+                            return_job <= M_INFO; seq_step <= 5'd5; main_state <= M_HEX;
+                        end
+                        5'd5: begin
+                            hex_val <= dsk_sum0[15:0];  hex_digits <= 3'd4;
+                            return_job <= M_INFO; seq_step <= 5'd6; main_state <= M_HEX;
+                        end
+                        5'd6:  if (!tx_fifo_full) begin fifo_push(" "); seq_step <= 5'd7; end
+                        5'd7:  if (!tx_fifo_full) begin fifo_push("I"); seq_step <= 5'd8; end
+                        5'd8:  if (!tx_fifo_full) begin fifo_push("2"); seq_step <= 5'd9; end
+                        5'd9:  if (!tx_fifo_full) begin fifo_push(":"); seq_step <= 5'd10; end
+                        5'd10: begin
+                            hex_val <= dsk_sum1[31:16]; hex_digits <= 3'd4;
+                            return_job <= M_INFO; seq_step <= 5'd11; main_state <= M_HEX;
+                        end
+                        5'd11: begin
+                            hex_val <= dsk_sum1[15:0];  hex_digits <= 3'd4;
+                            return_job <= M_INFO; seq_step <= 5'd12; main_state <= M_HEX;
+                        end
+                        5'd12: if (!tx_fifo_full) begin fifo_push(" "); seq_step <= 5'd13; end
+                        5'd13: if (!tx_fifo_full) begin fifo_push("H"); seq_step <= 5'd14; end
+                        5'd14: if (!tx_fifo_full) begin fifo_push(":"); seq_step <= 5'd15; end
+                        5'd15: begin
+                            hex_val <= {dsk_head, 8'h00}; hex_digits <= 3'd2;
+                            return_job <= M_INFO; seq_step <= 5'd16; main_state <= M_HEX;
+                        end
+                        5'd16: begin
+                            str_pos    <= STR_PROMPT_START;
+                            str_cnt    <= STR_PROMPT_LEN;
+                            return_job <= M_IDLE;
+                            main_state <= M_STR;
+                        end
+                        default: main_state <= M_IDLE;
+                    endcase
+                end
+
+                // -------------------------------------------------------------
                 // Screen Dump Sequencer
                 //
                 // Wire format, all hex text so a plain terminal can read it too:
@@ -1253,7 +1328,10 @@ module serial_debugger (
                                         str_pos <= STR_DONE_START;
                                     end else begin
                                         if (img_is_hd) hd_up_bad <= 1'b1;
-                                        else           img_up_bad <= 1'b1;
+                                        else begin
+                                            img_up_bad <= 1'b1;
+                                            if (img_drv) dsk_sum1 <= 32'd0; else dsk_sum0 <= 32'd0;
+                                        end
                                         str_pos <= STR_LOST_START;
                                     end
                                     str_cnt    <= (img_rx == {1'b0, img_addr} + 22'd1)
@@ -1270,6 +1348,8 @@ module serial_debugger (
                                 end else begin
                                     img_up_data <= img_byte;
                                     img_up_go   <= 1'b1;
+                                    if (img_drv) dsk_sum1 <= dsk_nxt;
+                                    else         dsk_sum0 <= dsk_nxt;
                                 end
                                 img_have    <= 1'b0;
                                 img_sent    <= 1'b1;
@@ -1284,7 +1364,10 @@ module serial_debugger (
                         end
                         if ((img_rx >= img_target_bytes) && !img_have && !img_sent && (img_addr != img_target_bytes[20:0])) begin
                             if (img_is_hd) hd_up_bad <= 1'b1;
-                            else           img_up_bad <= 1'b1;
+                            else begin
+                                img_up_bad <= 1'b1;
+                                if (img_drv) dsk_sum1 <= 32'd0; else dsk_sum0 <= 32'd0;
+                            end
                             str_pos    <= STR_LOST_START;
                             str_cnt    <= STR_LOST_LEN;
                             return_job <= M_IDLE;

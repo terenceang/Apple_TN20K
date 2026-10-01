@@ -21,6 +21,8 @@ import {
   prepareUploadImage,
   prepareDownloadImage,
   uploadDisk,
+  diskChecksum,
+  queryDiskSums,
   downloadDisk,
   HD_BLOCK_BYTES,
   HD_BLOCKS,
@@ -55,14 +57,11 @@ test('interleave tables are bijections and mutually inverse', () => {
     assert.equal(DOS_TO_PHYS[PHYS_TO_DOS[i]], i)
   }
 
-  // Canonical DOS 3.3 RWTS interleave check
-  assert.equal(DOS_TO_PHYS[0], 0x0)
-  assert.equal(DOS_TO_PHYS[1], 0x7)
-  assert.equal(DOS_TO_PHYS[2], 0xe)
-  assert.equal(DOS_TO_PHYS[3], 0x6)
-  assert.equal(DOS_TO_PHYS[13], 0x1)
-  assert.equal(DOS_TO_PHYS[14], 0x8)
-  assert.equal(DOS_TO_PHYS[15], 0xf)
+  // The DOS 3.3 interleave, as the boot sector spells it: its table at $084D is
+  // 00 0D 0B 09 07 05 03 01 0E 0C 0A 08 06 04 02 0F, the physical sector that
+  // holds logical sector 0, 1, 2 ... (boot1 asks the P6 ROM for these, in order,
+  // to put logical sectors 1-9 at $3700-$3F00).
+  assert.deepEqual(DOS_TO_PHYS, [0x0, 0xd, 0xb, 0x9, 0x7, 0x5, 0x3, 0x1, 0xe, 0xc, 0xa, 0x8, 0x6, 0x4, 0x2, 0xf])
 })
 
 test('detectDiskFormat distinguishes ProDOS and DOS orders by extension', () => {
@@ -106,17 +105,17 @@ test('dosToPhysical and physicalToDos interleave each track correctly and round-
   const physical = dosToPhysical(original)
   assert.equal(physical.length, DISK_BYTES)
 
-  // Track 0, logical sector 1 should have moved to physical sector 7 (offset 7 * 256)
-  const physSec7Off = 7 * SECTOR_BYTES
-  assert.equal(physical[physSec7Off], 0)
-  assert.equal(physical[physSec7Off + 1], 1)
-  assert.equal(physical[physSec7Off + 2], 0xaa)
+  // Track 0, logical sector 1 should have moved to physical sector 13 (offset 13 * 256)
+  const physSec13Off = 13 * SECTOR_BYTES
+  assert.equal(physical[physSec13Off], 0)
+  assert.equal(physical[physSec13Off + 1], 1)
+  assert.equal(physical[physSec13Off + 2], 0xaa)
 
-  // Track 0, logical sector 2 should have moved to physical sector 14 (offset 14 * 256)
-  const physSec14Off = 14 * SECTOR_BYTES
-  assert.equal(physical[physSec14Off], 0)
-  assert.equal(physical[physSec14Off + 1], 2)
-  assert.equal(physical[physSec14Off + 2], 0xaa)
+  // Track 0, logical sector 2 should have moved to physical sector 11 (offset 11 * 256)
+  const physSec11Off = 11 * SECTOR_BYTES
+  assert.equal(physical[physSec11Off], 0)
+  assert.equal(physical[physSec11Off + 1], 2)
+  assert.equal(physical[physSec11Off + 2], 0xaa)
 
   // Converting back must return the exact original
   const roundTrip = physicalToDos(physical)
@@ -426,4 +425,23 @@ test('downloadHardDisk streams 2 MB from FPGA with o1/o2 command', async () => {
   assert.ok(progressEvents.length > 0)
   assert.equal(progressEvents[progressEvents.length - 1].bytesReceived, HD_BYTES)
   assert.equal(link.onBytes, originalOnBytes)
+})
+
+test('diskChecksum is the rotate-and-add the FPGA computes', () => {
+  assert.equal(diskChecksum(new Uint8Array(0)), 0)
+  assert.equal(diskChecksum(Uint8Array.from([1])), 1)
+  assert.equal(diskChecksum(Uint8Array.from([1, 1])), 3) // (1<<1)+1
+  assert.equal(diskChecksum(Uint8Array.from([0x80, 0, 0, 0, 0])), 0x80 << 4) // rotates, no loss
+  const a = new Uint8Array(DISK_BYTES).fill(7)
+  const b = a.slice()
+  b[100] = 8
+  assert.notEqual(diskChecksum(a), diskChecksum(b))
+})
+
+test('queryDiskSums sends i and parses both checksums', async () => {
+  const link = createMockLink()
+  const p = queryDiskSums(link, { timeoutMs: 1000 })
+  assert.deepEqual([...link.written[0]], [0x69])
+  link.feed('\r\nI1:00000000 I2:DEADBEEF\r\n> ')
+  assert.deepEqual(await p, [0, 0xdeadbeef])
 })

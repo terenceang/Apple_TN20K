@@ -137,7 +137,7 @@ module disk2_card (
     // ------------------------------------------------------------------
     // I/O decode: the $C0Ex strobes the P6 ROM uses
     // ------------------------------------------------------------------
-    // $C0E0-$C0E3 stepper phases 0-3, $C0E8/$C0E9 motor off/on,
+    // $C0E0-$C0E7 stepper phases 0-3 (off at the even address, on at the odd), $C0E8/$C0E9 motor off/on,
     // $C0EA/$C0EB drive 1/2 select, $C0EC Q6L, $C0ED Q7L, $C0EE Q6, $C0EF Q7.
     // The strobes are level-sensitive, so a phase is set by a read as readily
     // as by a write.  bus_cycle is the caller's cpu_go, so the debugger poking
@@ -150,7 +150,7 @@ module disk2_card (
     wire io_sel  = !devsel_n && bus_cycle;
     wire [3:0] io_a = addr[3:0];
 
-    wire phase_hit = io_sel && (io_a < 4'd4);
+    wire phase_hit = io_sel && !io_a[3];   // $C0E0-$C0E7: phase n off at 2n, on at 2n+1
     wire motor_off = io_sel && (io_a == 4'h8);
     wire motor_on  = io_sel && (io_a == 4'h9);
     wire drive1    = io_sel && (io_a == 4'hA);
@@ -166,7 +166,6 @@ module disk2_card (
     reg        motor_q = 1'b0;
     reg        drive_q = 1'b0;      // 0 = drive 1
     reg [7:0]  head_q  = 8'd0;     // the track under the head, 0..34
-    reg [1:0]  phase_q = 2'd3;     // the last phase selected
     reg        wr_mode_q = 1'b0;   // Q7: the read/write mode select
     reg [7:0]  shreg      = 8'hFF; // the shift register (write mode)
     reg        started    = 1'b0;  // the first tick after reset presents byte 0 without moving on
@@ -204,41 +203,49 @@ module disk2_card (
     // phases are not a compass: DOS's out-sequence is 0-1-2-3 and its in-sequence
     // is 1-0-3-2, and under any "this phase means forward" rule the first of
     // them nets zero, because it is symmetric.
-    reg [1:0]  pulse_cnt = 2'd0;    // pulses into the current four-pulse run
-    reg        dir_q     = 1'b0;    // 1 = out (toward track 34), 0 = in
+    // The stepper, as the hardware does it: each phase has an off address and
+    // an on address, and the head moves one half-track toward the neighbouring
+    // phase that is energised when a phase comes on.  DOS moves a track with two
+    // such steps (on the next phase, off the previous one, twice), so a seek to
+    // track N is 2N half-tracks, and recalibrating is 80 steps inward against
+    // the stop.  ph_cur is the phase the head last settled on, which is what
+    // makes "next" and "previous" mean anything.
+    reg [3:0]  ph_mask  = 4'd0;      // phases currently energised
+    reg [1:0]  ph_cur   = 2'd0;
+    reg [6:0]  half_q   = 7'd0;      // half-tracks, 0..2*TRACK_MAX
 
-    wire [1:0] phase_step = io_a[1:0] - phase_q;   // (new - old) mod 4
+    wire [1:0] ph_n      = io_a[2:1];
+    wire [3:0] mask_nx   = io_a[0] ? (ph_mask | (4'd1 << ph_n)) : (ph_mask & ~(4'd1 << ph_n));
+    wire       pull_up   = mask_nx[ph_cur + 2'd1];
+    wire       pull_dn   = mask_nx[ph_cur - 2'd1];
 
     always @(posedge clk or posedge reset) begin
         if (reset) begin
             motor_q   <= 1'b0;
             drive_q   <= 1'b0;
             head_q    <= 8'd0;
-            phase_q   <= 2'd3;
-            pulse_cnt <= 2'd0;
-            dir_q     <= 1'b0;
+            ph_mask   <= 4'd0;
+            ph_cur    <= 2'd0;
+            half_q    <= 7'd0;
         end else if (bus_cycle) begin
             if (motor_off)     motor_q <= 1'b0;
             else if (motor_on) motor_q <= 1'b1;
             if (drive1)        drive_q <= 1'b0;
             else if (drive2)   drive_q <= 1'b1;
             if (phase_hit) begin
-                phase_q <= io_a[1:0];
-                // A successor steps out, a predecessor steps in; a repeat or a
-                // skip leaves the direction as it was.
-                if (phase_step == 2'd1) dir_q <= 1'b1;
-                if (phase_step == 2'd3) dir_q <= 1'b0;
-                // Every four pulses is one track, in the direction the
-                // sequence was going.
-                if (pulse_cnt == 2'd3) begin
-                    pulse_cnt <= 2'd0;
-                    if (dir_q) begin
-                        if (head_q != TRACK_MAX) head_q <= head_q + 1'b1;
-                    end else begin
-                        if (head_q != 8'd0)      head_q <= head_q - 1'b1;
+                ph_mask <= mask_nx;
+                if (io_a[0] && pull_up && !pull_dn) begin
+                    ph_cur <= ph_cur + 2'd1;
+                    if (half_q != {TRACK_MAX[5:0], 1'b0}) begin
+                        half_q <= half_q + 1'b1;
+                        head_q <= {1'b0, half_q + 7'd1} >> 1;
                     end
-                end else begin
-                    pulse_cnt <= pulse_cnt + 1'b1;
+                end else if (io_a[0] && pull_dn && !pull_up) begin
+                    ph_cur <= ph_cur - 2'd1;
+                    if (half_q != 7'd0) begin
+                        half_q <= half_q - 1'b1;
+                        head_q <= {1'b0, half_q - 7'd1} >> 1;
+                    end
                 end
             end
         end
@@ -597,9 +604,9 @@ module disk2_card (
         $readmemh("roms/disk2_p6.hex", p6_rom);
     end
 `endif
-    always @(posedge clk) begin
-        if (!iosel_n) p6_dout <= p6_rom[addr[7:0]];
-    end
+    // Latched every clock, not only under /IOSEL: the strobe is one clock wide (cpu_go)
+    // and the CPU samples on that same edge, so a read gated by it returns the last access.
+    always @(posedge clk) p6_dout <= p6_rom[addr[7:0]];
     assign rom_data = !iosel_n ? p6_dout : 8'h00;
 
 endmodule

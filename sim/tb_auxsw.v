@@ -68,8 +68,11 @@ module tb_auxsw;
         wr(16'hC00B); status(16'hC017, "SLOTC3ROM on", 1);
         wr(16'hC00A); status(16'hC017, "SLOTC3ROM off", 0);
 
-        // Internal ROM gating.  Reset state: INTCXROM on -> ROM everywhere.
-        status(16'hC015, "INTCXROM reset", 1);
+        // Internal ROM gating.  Reset state: INTCXROM off, as on a //e, so the
+        // slot scan boots the card and not the self-test at $C600.
+        status(16'hC015, "INTCXROM reset", 0);
+        rd(16'hC100); check("C100 floats at reset", dut.cpu_din === 8'h00);
+        wr(16'hC007);
         rd(16'hC100); check("C100 ROM when INTCXROM", dut.cpu_din === dut.u_rom.mem[16'h0100]);
         wr(16'hC006);
         rd(16'hC100); check("C100 floats when INTCXROM off", dut.cpu_din === 8'h00);

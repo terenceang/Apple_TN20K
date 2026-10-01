@@ -294,15 +294,17 @@ module tb_disk2;
         end
     endtask
 
-    // The stepper, driven with DOS's own two seek sequences: 0-1-2-3 steps out
-    // (toward track 34) and 1-0-3-2 steps in (toward track 0).  DOS recalibrates
-    // -- the in-sequence repeated until the head stops -- before a multi-track
-    // seek, and so does seek_toward here: see the stepper note in the card for
-    // why the phase a sequence starts from matters.
-    task step_out; begin xfer(4'h0, 1'b0, 8'h00); xfer(4'h1, 1'b0, 8'h00);
-                          xfer(4'h2, 1'b0, 8'h00); xfer(4'h3, 1'b0, 8'h00); end endtask
-    task step_in;  begin xfer(4'h1, 1'b0, 8'h00); xfer(4'h0, 1'b0, 8'h00);
-                          xfer(4'h3, 1'b0, 8'h00); xfer(4'h2, 1'b0, 8'h00); end endtask
+    // The stepper, driven the way DOS does it: a half-track is "turn on the next
+    // phase, turn off the one before" ($C0E0+2n off, $C0E1+2n on), and a track is
+    // two of them.  bph is the phase the head is on, which is what "next" is
+    // relative to; DOS tracks it the same way.
+    reg [1:0] bph = 2'd0;
+    task half_out; reg [1:0] p; begin p = bph + 2'd1;
+        xfer({1'b0, p, 1'b1}, 1'b0, 8'h00); xfer({1'b0, bph, 1'b0}, 1'b0, 8'h00); bph = p; end endtask
+    task half_in;  reg [1:0] p; begin p = bph - 2'd1;
+        xfer({1'b0, p, 1'b1}, 1'b0, 8'h00); xfer({1'b0, bph, 1'b0}, 1'b0, 8'h00); bph = p; end endtask
+    task step_out; begin half_out; half_out; end endtask
+    task step_in;  begin half_in;  half_in;  end endtask
 
     task recalibrate;
         integer guard;
@@ -658,7 +660,7 @@ module tb_disk2;
 
         // ---- the stepper ----
         check("the head starts at track 0", dbg_track === 7'd0);
-        // A DOS seek sequence is four pulses and moves one whole track.
+        // A DOS seek is two half-steps and moves one whole track.
         step_out;
         check("one out-step is one track", dbg_track === 7'd1);
         step_out; step_out;

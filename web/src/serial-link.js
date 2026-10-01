@@ -116,7 +116,7 @@ export class SerialLink {
   /**
    * Ask for a port and confirm it is the FPGA's UART.
    *
-   * @param {{verify?: boolean}} [opts]
+   * @param {{verify?: boolean, port?: object}} [opts] port: an already-granted port (skips the picker)
    * @returns {Promise<'ok'|'wrong-port'|'cancelled'>}
    */
   async open(opts = {}) {
@@ -128,7 +128,7 @@ export class SerialLink {
     this.closing = false
     this.emit('opening')
     try {
-      this.port = await this.serial.requestPort()
+      this.port = opts.port ?? (await this.serial.requestPort())
     } catch (e) {
       // A dismissed picker throws; that is not an error worth shouting about.
       this.port = null
@@ -181,11 +181,25 @@ export class SerialLink {
       let settled = false
       this.emit('probing')
 
-      const timer = setTimeout(() => finish('wrong-port'), PROBE_TIMEOUT_MS)
+      let timer = null
       let probe2Timer = null
+      let tries = 0
       const cleanup = () => {
         clearTimeout(timer)
         if (probe2Timer) clearTimeout(probe2Timer)
+      }
+      // Ctrl+B toggles. A machine left in the debugger by an earlier page is
+      // resumed by the probe's Ctrl+B, so the '?' goes unanswered; the second try
+      // finds it running and enters the debugger.
+      const probe = () => {
+        tries++
+        timer = setTimeout(() => (tries < 2 ? probe() : finish('wrong-port')), PROBE_TIMEOUT_MS)
+        // On real hardware the FPGA drops '?' while printing the initial banner,
+        // so re-send '?' after 250ms once banner finishes.
+        this.write(PROBE_BYTES)
+        probe2Timer = setTimeout(() => {
+          if (!settled) this.write(Uint8Array.from([PROBE_BYTE]))
+        }, 250)
       }
 
       const finish = (result) => {
@@ -213,14 +227,7 @@ export class SerialLink {
         if (hs.feed(bytes)) finish('ok')
       }
 
-      // Send PROBE_BYTES (Ctrl+B and '?'). On real hardware the FPGA drops '?' while
-      // printing the initial banner, so re-send '?' after 250ms once banner finishes.
-      this.write(PROBE_BYTES)
-      probe2Timer = setTimeout(() => {
-        if (!settled) {
-          this.write(Uint8Array.from([PROBE_BYTE]))
-        }
-      }, 250)
+      probe()
     })
     return this._verify
   }
@@ -246,7 +253,8 @@ export class SerialLink {
   /** Queue bytes; the writer is held open for the life of the connection. */
   write(bytes) {
     if (!this.port?.writable) return
-    this.queue.push(bytes)
+    // Web Serial rejects plain arrays (disk.js sends [0x64]); a copy also keeps queued subarrays stable.
+    this.queue.push(Uint8Array.from(bytes))
     void this.drain()
   }
 

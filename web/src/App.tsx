@@ -9,6 +9,7 @@ import { DebuggerPane } from './components/DebuggerPane'
 import { Gamepad } from './components/Gamepad'
 import { FlashBar } from './components/FlashBar'
 import { DiskPane } from './components/DiskPane'
+import { DiskDrives } from './components/DiskDrives'
 
 import {
   PREF_CONSOLE,
@@ -195,6 +196,13 @@ export default function App() {
               onClose={() => setShowPaddles(false)}
             />
           )}
+          <DiskDrives
+            drives={apple.drives}
+            diskError={apple.diskError}
+            onMount={apple.uploadDiskFile}
+            onClearError={apple.clearDiskError}
+            disabled={apple.conn.state !== 'open'}
+          />
           <Keyboard
             mode={apple.mode}
             onPress={press}

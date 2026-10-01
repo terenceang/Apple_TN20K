@@ -83,7 +83,7 @@ module tb_diskimg;
         .img_dn_go(img_dn_go), .img_dn_drive(img_dn_drive), .img_dn_addr(img_dn_addr),
         .img_dn_last(img_dn_last), .img_dn_data(img_dn_data),
         .img_dn_valid(img_dn_valid), .img_dn_done(img_dn_done),
-        .cpu_pc(cpu_pc), .cpu_a(cpu_a), .cpu_x(cpu_x), .cpu_y(cpu_y), .cpu_s(cpu_s),
+        .cpu_pc(cpu_pc), .dsk_head(8'd0), .cpu_a(cpu_a), .cpu_x(cpu_x), .cpu_y(cpu_y), .cpu_s(cpu_s),
         .cpu_p(cpu_p), .cpu_ir(cpu_ir), .cpu_addr(cpu_addr), .cpu_dout(cpu_dout),
         .cpu_we(cpu_we), .cpu_sync(cpu_sync),
         .text_mode(1'b1), .mixed_mode(1'b0), .page2(1'b0), .hires_mode(1'b0),
@@ -190,6 +190,7 @@ module tb_diskimg;
 
     // Shared by the tasks and the initial block, and declared before them because
     // Icarus will not bind a task port to something declared later.
+    reg [31:0] sum_exp;
     integer i, bad, outstanding, acks, WINDOW = 16, match, slen;
     reg [7:0] gotb;
     reg [7:0] skipbuf [0:15];
@@ -487,6 +488,26 @@ module tb_diskimg;
         check(drv_present[0] === 1'b0, "an upload to drive 2 does not fill drive 1");
         check(drv_writable[1] === 1'b1, "a drive with an image is writable");
 
+        // The fingerprint the host compares (web/src/disk.js diskChecksum): the
+        // rotate-and-add of every byte sent, and 0 for the drive with no image.
+        sum_exp = 32'd0;
+        for (i = 0; i < IMG_BYTES; i = i + 1)
+            sum_exp = {sum_exp[30:0], sum_exp[31]} + {24'd0, pat(i)};
+        check(u_dbg.dsk_sum1 === sum_exp, "drive 2's checksum is the sum of what was sent");
+        check(u_dbg.dsk_sum0 === 32'd0, "drive 1's checksum stays 0 while it is empty");
+
+        // ...and the i command prints it: CRLF, I1:00000000 I2:, then 8 hex digits.
+        send_cmd("i");
+        expect_str({8'h0D, 8'h0A, "I1:00000000"});
+        expect_str(" I2:");
+        for (i = 7; i >= 0; i = i - 1) begin
+            getbyte(gotb);
+            check(gotb === ((sum_exp[4*i +: 4] < 10) ? 8'h30 + sum_exp[4*i +: 4]
+                                                    : 8'h37 + sum_exp[4*i +: 4]),
+                  "the i command prints drive 2's checksum digit by digit");
+        end
+        skip_until(">");
+
         // The image itself, read out of the SDRAM model rather than back down the
         // wire: the upload's own check is the acknowledgements above, and this one
         // says where the bytes landed.
@@ -556,6 +577,7 @@ module tb_diskimg;
         check(drv_present[0] === 1'b0, "an upload that lost bytes leaves the drive empty");
         check(drv_writable[0] === 1'b0, "an upload that lost bytes leaves it protected");
         check(drv_present[1] === 1'b0, "the reset cleared drive 2 as well");
+        check(u_dbg.dsk_sum0 === 32'd0, "an upload that lost bytes leaves no checksum");
 
         // ==============================================================
         // 5. Every address in the image, driven straight into the store

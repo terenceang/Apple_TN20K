@@ -11,6 +11,7 @@ export const PREF_DEBUGGER = 'a2e.showDebugger'
 export const PREF_SCREEN = 'a2e.showScreen'
 export const PREF_PADDLES = 'a2e.showPaddles'
 export const PREF_DISKS = 'a2e.showDisks'
+export const PREF_AUTOCONNECT = 'a2e.autoConnect'
 export const PREF_SCREEN_PALETTE = 'a2e.screenPalette'
 export const PREF_SCREEN_SCANLINES = 'a2e.screenScanlines'
 export const PREF_SCREEN_AUTOREFRESH = 'a2e.screenAutoRefresh'
@@ -111,5 +112,25 @@ export function formatConnState(conn, baud = BAUD) {
       return conn.error ?? conn.detail ?? 'error'
     default:
       return ''
+  }
+}
+
+const diskKey = (n) => `a2e.disk${n}`
+
+/** What this page last loaded into Disk II drive n: { filename, sum } or null. */
+export function loadDisk(store, n) {
+  try {
+    const v = JSON.parse(store?.getItem(diskKey(n)) ?? 'null')
+    return v && typeof v.filename === 'string' && Number.isInteger(v.sum) ? v : null
+  } catch {
+    return null
+  }
+}
+
+export function saveDisk(store, n, value) {
+  try {
+    store?.setItem(diskKey(n), JSON.stringify(value))
+  } catch {
+    /* storage is a convenience, never a requirement */
   }
 }

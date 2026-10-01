@@ -109,6 +109,7 @@ module apple2_core (
     output wire [7:0]  hd_dn_data,
     output wire        hd_dn_valid,
     output wire        hd_dn_done,
+    output wire [7:0]  debug_dsk_head,   // the Disk ][ head's track (for the debugger's i command)
     output wire [15:0] debug_cpu_pc,
     output wire [15:0] debug_cpu_addr,
     output wire [7:0]  debug_cpu_dout,
@@ -244,7 +245,7 @@ module apple2_core (
             altchar      <= 1'b0;
             col80        <= 1'b0;
             store80      <= 1'b0;
-            intcxrom     <= 1'b1; // Default: Internal CX ROM active
+            intcxrom     <= 1'b0; // RESET clears INTCXROM, so the slot scan boots the card, not the //e self-test at $C600
             slotc3rom    <= 1'b0;
             intc8rom     <= 1'b0;
             ramrd        <= 1'b0;
@@ -576,6 +577,7 @@ module apple2_core (
     assign card_present = 7'b1100000;   // slot 7 (bit 6) and slot 6 (bit 5)
     wire [6:0]  d2_dbg_track;
     wire [7:0]  d2_dbg_head;
+    assign debug_dsk_head = d2_dbg_head;
 
     disk2_card u_disk2 (
         .clk(clk),

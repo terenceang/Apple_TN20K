@@ -130,6 +130,7 @@ module top (
     wire        cpu_reset_req;
 
     wire [15:0] debug_cpu_pc;
+    wire [7:0]  debug_dsk_head;
     wire [15:0] debug_cpu_addr;
     wire [7:0]  debug_cpu_dout;
     wire        debug_cpu_we;
@@ -198,6 +199,7 @@ module top (
         .hd_dn_valid(hd_dn_valid),
         .hd_dn_done(hd_dn_done),
         .cpu_pc(debug_cpu_pc),
+        .dsk_head(debug_dsk_head),
         .cpu_a(debug_cpu_a),
         .cpu_x(debug_cpu_x),
         .cpu_y(debug_cpu_y),
@@ -358,6 +360,7 @@ module top (
         .hd_dn_valid(hd_dn_valid),
         .hd_dn_done(hd_dn_done),
         .debug_cpu_pc(debug_cpu_pc),
+        .debug_dsk_head(debug_dsk_head),
         .debug_cpu_addr(debug_cpu_addr),
         .debug_cpu_dout(debug_cpu_dout),
         .debug_cpu_we(debug_cpu_we),

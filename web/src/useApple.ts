@@ -3,6 +3,7 @@ import { AppleStream } from './stream.js'
 import { encodeGamepad, encodeKey, encodeKeysUp, encodeReset, CTRL_B, CMD } from './protocol.js'
 import { SerialLink, serialSupported, BAUD } from './serial-link.js'
 import { isLetter, resolve } from './keymap.js'
+import { PREF_AUTOCONNECT, getSavedBool, setSavedBool, loadDisk, saveDisk } from './prefs.js'
 import {
   validateDiskImage,
   prepareUploadImage,
@@ -12,6 +13,8 @@ import {
   validateHardDiskImage,
   uploadHardDisk,
   downloadHardDisk,
+  diskChecksum,
+  queryDiskSums,
 } from './disk.js'
 
 export type ConnState =
@@ -251,6 +254,8 @@ export function useApple() {
     }
   }, [])
 
+  const store = typeof localStorage !== 'undefined' ? localStorage : null
+
   const attach = useCallback(
     (l: Link) => {
       void link.current?.close()
@@ -272,24 +277,68 @@ export function useApple() {
    * Web Serial's device picker only opens from a user gesture.
    */
   const connectSerial = useCallback(
-    async (opts?: { verify?: boolean }) => {
+    async (opts?: { verify?: boolean; port?: unknown }) => {
       const l = new SerialLink() as unknown as Link
       attach(l)
       setConn({ state: 'opening', detail: null, transport: 'serial', error: null })
-      await l.open(opts)
+      const result = await (l as any).open(opts)
+      if (result === 'ok') setSavedBool(store, PREF_AUTOCONNECT, true)
+      return result
     },
-    [attach],
+    [attach, store],
   )
+
+  /**
+   * Reconnect without a click: Chrome remembers ports the user has granted
+   * (across refresh and restart) and getPorts() returns them with no gesture.
+   * The debugger handshake still picks the FT2232's UART channel out of them.
+   * Runs on load and whenever a granted board is plugged in or powered up.
+   */
+  const autoBusy = useRef(false)
+  const autoConnect = useCallback(async () => {
+    const serial = typeof navigator !== 'undefined' ? (navigator as any).serial : null
+    if (!serialSupported(serial) || !getSavedBool(store, PREF_AUTOCONNECT, true)) return
+    const st = () => (link.current as any)?.state
+    // One run at a time: StrictMode mounts twice and the connect event can fire
+    // mid-probe, and two opens of the same port make the second one fail.
+    if (autoBusy.current) return
+    if (link.current && !['idle', 'error', 'wrong-port'].includes(st())) return
+    autoBusy.current = true
+    try {
+      // A refresh races the old page's hold on the port, which Chrome releases a
+      // moment after the document goes: a failed open is retried before it is believed.
+      for (let attempt = 0; attempt < 4; attempt++) {
+        for (const port of await serial.getPorts()) {
+          if ((await connectSerial({ port })) === 'ok') return
+        }
+        if (st() !== 'error') break
+        await new Promise((r) => setTimeout(r, 1000))
+      }
+      // Leave a failure on screen (a port another tab holds says so); only no ports at all is quiet.
+      if (st() !== 'open' && st() !== 'error' && st() !== 'wrong-port') setConn(IDLE)
+    } finally {
+      autoBusy.current = false
+    }
+  }, [connectSerial, store])
+
+  useEffect(() => {
+    const serial = typeof navigator !== 'undefined' ? (navigator as any).serial : null
+    if (!serialSupported(serial)) return
+    void autoConnect()
+    serial.addEventListener('connect', autoConnect)
+    return () => serial.removeEventListener('connect', autoConnect)
+  }, [autoConnect])
 
   const connectWithoutVerify = useCallback(async () => {
     await connectSerial({ verify: false })
   }, [connectSerial])
 
   const disconnect = useCallback(async () => {
+    setSavedBool(store, PREF_AUTOCONNECT, false) // an explicit Disconnect sticks across refresh
     await link.current?.close()
     link.current = null
     setConn(IDLE)
-  }, [])
+  }, [store])
 
   const send = useCallback((bytes: number[] | Uint8Array) => link.current?.write(bytes), [])
 
@@ -370,7 +419,7 @@ export function useApple() {
       }
       setDiskError(null)
       setDrives((d) => ({ ...d, [drive]: { ...d[drive], busy: true } }))
-      const wasConsole = mode === 'console'
+      const wasConsole = stream.current.mode === 'console'
 
       try {
         const buffer = await file.arrayBuffer()
@@ -382,15 +431,22 @@ export function useApple() {
           await new Promise((r) => setTimeout(r, QUIET_MS))
         }
 
-        setDiskProgress({
-          drive,
-          device: 'floppy',
-          phase: 'uploading',
-          percent: 0,
-          detail: `Starting upload of ${file.name}...`,
-        })
+        // Ask the board first: the image survives in its SDRAM, so an identical
+        // one needs no 12 s transfer.
+        const sum = diskChecksum(physical)
+        const onBoard = (await queryDiskSums(link.current).catch(() => [-1, -1]))[drive - 1] // old firmware: no `i`, just upload
 
-        await uploadDisk(link.current, drive, physical, {
+        if (onBoard !== sum) {
+          setDiskProgress({
+            drive,
+            device: 'floppy',
+            phase: 'uploading',
+            percent: 0,
+            detail: `Starting upload of ${file.name}...`,
+          })
+        }
+
+        if (onBoard !== sum) await uploadDisk(link.current, drive, physical, {
           onProgress: (p) => {
             const percent = Math.round((p.track / p.totalTracks) * 100)
             setDiskProgress({
@@ -403,6 +459,7 @@ export function useApple() {
           },
         })
 
+        saveDisk(store, drive, { filename: file.name, sum })
         setDrives((d) => ({ ...d, [drive]: { filename: file.name, busy: false } }))
         setDiskProgress(null)
 
@@ -420,8 +477,52 @@ export function useApple() {
         throw err
       }
     },
-    [conn.state, mode, send, release],
+    [conn.state, mode, send, release, store],
   )
+
+  /**
+   * Ask the board what its drives hold and show that, not what this page last
+   * did: a power cycle empties them, and another browser may have loaded them.
+   * A drive whose checksum matches what we saved gets its filename back.
+   */
+  const syncDrives = useCallback(async () => {
+    if (!link.current || conn.state !== 'open') return
+    const wasConsole = stream.current.mode === 'console'
+    try {
+      if (wasConsole) {
+        send([CTRL_B])
+        await new Promise((r) => setTimeout(r, QUIET_MS))
+      }
+      const sums = await queryDiskSums(link.current)
+      setDrives((d) => {
+        const next = { ...d }
+        for (const n of [1, 2] as const) {
+          const saved = loadDisk(store, n)
+          next[n] = {
+            ...d[n],
+            filename: sums[n - 1] === 0 ? null : saved && saved.sum === sums[n - 1] ? saved.filename : 'Unknown image',
+          }
+        }
+        return next
+      })
+    } catch {
+      // Firmware without the `i` command: leave the display as it is.
+    } finally {
+      if (wasConsole) release(CMD.cont.charCodeAt(0))
+    }
+  }, [conn.state, mode, send, release, store])
+
+  const syncRef = useRef(syncDrives)
+  syncRef.current = syncDrives
+  useEffect(() => {
+    if (conn.state !== 'open') return
+    // The probe left the debugger again, so the machine is running; the parser
+    // may still think the probe's banner is the last word, and a transfer that
+    // trusts that never pauses the machine and talks to the keyboard instead.
+    stream.current.mode = 'console'
+    setMode('console')
+    void syncRef.current()
+  }, [conn.state])
 
   const downloadDiskFile = useCallback(
     async (drive: 1 | 2, format: 'dsk' | 'po' = 'dsk') => {
@@ -430,7 +531,7 @@ export function useApple() {
       }
       setDiskError(null)
       setDrives((d) => ({ ...d, [drive]: { ...d[drive], busy: true } }))
-      const wasConsole = mode === 'console'
+      const wasConsole = stream.current.mode === 'console'
 
       try {
         if (wasConsole) {
@@ -509,7 +610,7 @@ export function useApple() {
       }
       setDiskError(null)
       setHardDrives((d) => ({ ...d, [drive]: { ...d[drive], busy: true } }))
-      const wasConsole = mode === 'console'
+      const wasConsole = stream.current.mode === 'console'
 
       try {
         const buffer = await file.arrayBuffer()
@@ -568,7 +669,7 @@ export function useApple() {
       }
       setDiskError(null)
       setHardDrives((d) => ({ ...d, [drive]: { ...d[drive], busy: true } }))
-      const wasConsole = mode === 'console'
+      const wasConsole = stream.current.mode === 'console'
 
       try {
         if (wasConsole) {

@@ -255,10 +255,8 @@ module prodos_card (
 
     // ROM Read output for $C700-$C7FF (clocked, matching disk2_card)
     reg [7:0] rom_dout = 8'h00;
-    always @(posedge clk) begin
-        if (!iosel_n)
-            rom_dout <= rom[addr[7:0]];
-    end
+    // Every clock, not under /IOSEL: that strobe is one clock wide and the CPU samples on it.
+    always @(posedge clk) rom_dout <= rom[addr[7:0]];
     assign rom_data = !iosel_n ? rom_dout : 8'h00;
 
     // -------------------------------------------------------------------------

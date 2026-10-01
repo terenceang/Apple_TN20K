@@ -1446,3 +1446,90 @@ button.opt-pill.selected {
   line-height: 1.4;
 }
 
+
+/* --- Disk II drives, above the keyboard ---------------------------------- */
+
+.disk-drives {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.disk-drive {
+  flex: 1 1 200px;
+  background: linear-gradient(180deg, var(--case) 0%, var(--case-dark) 100%);
+  border-radius: 6px;
+  padding: 8px 12px 10px;
+  box-shadow: inset 0 1px 0 #e6e0cd, inset 0 -2px 6px var(--case-shadow), 0 3px 10px rgba(0, 0, 0, 0.5);
+  color: #4a4438;
+}
+
+.dd-top {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font: 700 11px var(--sans);
+  letter-spacing: 0.08em;
+}
+
+.dd-name i { font-style: normal; letter-spacing: -0.1em; }
+.dd-num { margin-right: auto; opacity: 0.7; }
+
+.dd-led {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #4a1612;
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.6);
+}
+.dd-led.idle { background: #7a2018; }
+.dd-led.on { background: #ff3b2a; box-shadow: 0 0 6px #ff3b2a; }
+
+.dd-slot {
+  position: relative;
+  height: 14px;
+  margin: 8px 0;
+  background: #1a1815;
+  border-radius: 2px;
+  box-shadow: inset 0 2px 4px #000, 0 1px 0 #e6e0cd;
+}
+
+.dd-label {
+  position: absolute;
+  left: 8%;
+  right: 8%;
+  top: 3px;
+  bottom: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  background: #efe9d6;
+  color: #3a352c;
+  font: 9px/11px var(--mono);
+  padding: 0 4px;
+  border-radius: 1px 1px 0 0;
+}
+
+.dd-select {
+  display: block;
+  margin: 0 auto;
+  padding: 3px 14px;
+  font: 700 10px var(--sans);
+  letter-spacing: 0.1em;
+  color: var(--legend);
+  background: var(--cap);
+  border: 1px solid var(--cap-edge);
+  border-radius: 3px;
+  cursor: pointer;
+}
+.dd-select:hover:not(:disabled) { filter: brightness(1.25); }
+.dd-select:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.dd-error {
+  flex-basis: 100%;
+  text-align: left;
+  color: var(--err);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+}
