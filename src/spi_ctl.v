@@ -163,13 +163,13 @@ module spi_ctl #(
                 end
 
                 ST_IDLE: begin
-                    if (flush_now) begin
+                    if (timer != 0) begin
+                        timer <= timer - 25'd1;     // CS stays high for the gap before any frame
+                    end else if (flush_now) begin
                         dirty[scan] <= 1'b0;
                         wdrv <= scan_drv; wtrk <= scan_trk7[5:0];
                         set_cmd(OP_WRITE, scan_drv, scan_trk7[5:0]);
                         nxt <= ST_CMD_SEND; st <= ST_CS;
-                    end else if (timer != 0) begin
-                        timer <= timer - 25'd1;
                     end else if (link_up && need_fetch) begin
                         fdrv <= !nf0; ftrk <= 6'd0;
                         drv_present[nf0 ? 1'b0 : 1'b1] <= 1'b0;
@@ -177,7 +177,6 @@ module spi_ctl #(
                         nxt <= ST_CMD_SEND; st <= ST_CS;
                     end else begin
                         set_cmd(link_up ? OP_STAT : OP_PING, 1'b0, 6'd0);
-                        timer <= STAT_CLKS;
                         nxt <= ST_CMD_SEND; st <= ST_CS;
                     end
                 end
@@ -258,7 +257,7 @@ module spi_ctl #(
                 end
 
                 ST_FIN: begin
-                    spi_cs_n <= 1'b1; timer <= GAP_CLKS;
+                    spi_cs_n <= 1'b1; timer <= (op == OP_STAT) ? STAT_CLKS : GAP_CLKS;
                     case (op)
                         OP_STAT: begin
                             drv_present <= drv_present & {gen1_seen != 8'd0, gen0_seen != 8'd0};

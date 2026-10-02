@@ -1,8 +1,9 @@
 // ESP32 companion for the Apple //e FPGA (Tang Nano 20K).
 // SD card on SPI2 (GPIO 25 SCK, 26 MOSI, 27 MISO, 32 CS: clear of the strapping
-// pins), FPGA link on SPI3/VSPI (see link.c), disk images in SD_MOUNT/disk{1,2}.*.
+// pins), FPGA link on SPI3/VSPI (see link.c), disk library in DISK_DIR.
 #include "disks.h"
 #include "link.h"
+#include "oled.h"
 #include "web.h"
 #include "driver/sdspi_host.h"
 #include "esp_log.h"
@@ -26,9 +27,11 @@ void app_main(void) {
     esp_vfs_fat_sdmmc_mount_config_t mc = {.format_if_mount_failed = false, .max_files = 4,
                                            .allocation_unit_size = 16 * 1024};
     sdmmc_card_t *card;
-    if (esp_vfs_fat_sdspi_mount(SD_MOUNT, &host, &slot, &mc, &card) != ESP_OK)
+    sd_ok = esp_vfs_fat_sdspi_mount(SD_MOUNT, &host, &slot, &mc, &card) == ESP_OK;
+    if (!sd_ok)
         ESP_LOGE(TAG, "no SD card: both drives stay empty");
-    disks_init();   // also creates the lock; mounts nothing without a card
+    disks_init();   // lock, library dir, and the images each drive held at the last reset
     link_start();
     web_start();
+    oled_start();
 }
